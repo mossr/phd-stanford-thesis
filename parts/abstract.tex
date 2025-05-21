@@ -1,0 +1,10 @@
+\prefacesection{Abstract}
+To make safe decisions in real-world environments, algorithms must account for the inherent uncertainty in perception systems and agent dynamics, resulting in high-dimensional problems.
+The use of surrogate models to replace hand-crafted planning heuristics and avoid running the computationally expensive true system has shown promise in enabling large-scale, safe planning.
+This thesis introduces five main contributions to address the challenges of safe planning under uncertainty and validation.
+To improve planning efficiency over beliefs in partially observable Markov decision processes (POMDPs), we introduce \textit{batched belief-state MDPs}, which abstract belief-state planning using parallelizable batches of the underlying models.
+This abstraction requires models that can be easily parallelized; therefore, we can learn surrogate transition and observation models from data and propose the \textit{inversion variational autoencoder} ($\mathcal{I}$-VAE) to sample from the posterior belief given partial observations.
+To replace planning heuristics and enable long-horizon planning, we introduce \textit{BetaZero}, a policy iteration algorithm that combines offline learning with online belief-state planning.
+Extending BetaZero to safety-critical problems, we propose \textit{ConstrainedZero}, which solves chance-constrained POMDPs by optimizing the balance between utility and a target level of safety.
+Finally, given a learned safe policy, we develop a \textit{Bayesian safety validation} method to estimate the failure probability of a black-box system using probabilistic surrogate models.
+We apply these algorithms to real-world problems, including aircraft collision avoidance, autonomous aircraft runway detection, safe carbon capture and storage, critical mineral exploration, robot navigation, and aerial wildfire suppression.

@@ -1,0 +1,16 @@
+\begin{algorithm}[H]
+    \caption{BetaZero action progressive widening.}
+    \label{alg:betazero-action-pw}
+    \begin{algorithmic}[1]
+        \Function{ActionSelection$(f_\theta, b)$}{}
+            \State $\tilde{b} \leftarrow \phi(b)$ \Comment{belief representation}
+            \If {$| A(b) | \le k_a N(b)^{\alpha_a}\phantom{\tilde{b}}$} \Comment{action progressive widening}
+                \State $a \sim P_\theta(\tilde{b}, \cdot)$ \Comment{prioritized from network}\label{line:sample_action}
+                \State $N(b,a) \leftarrow N_0(b,a)$
+                \State $Q(b,a) \leftarrow Q_0(b,a)$ \label{line:init_q} \Comment{bootstrap initial $Q$-value}
+                \State $A(b) \leftarrow A(b) \cup \{a\}$ \Comment{add to visited actions $A(b)$}
+            \EndIf
+            \State \Return ${\displaystyle\argmax_{a \in A(b)}}\ \widebar{Q}(b,a) + c\Bigl(P_\theta(\tilde{b},a)\frac{\sqrt{N(b)}}{1 + N(b,a)}\Bigr)$ \Comment{PUCT}
+        \EndFunction
+    \end{algorithmic}
+\end{algorithm}

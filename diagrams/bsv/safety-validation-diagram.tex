@@ -1,0 +1,56 @@
+  \tikzset{
+    >={Latex[width=1.5mm,length=1.5mm]},
+    end/.style = {circle, minimum width=2mm, minimum height=2mm},
+    startstyle/.style = {rectangle, semithick, fill=\secondarycolor, draw=\primarycolor, minimum width=3mm, minimum height=3mm},
+    successstyle/.style = {end,  fill=darkgreen},
+    failurestyle/.style = {end, fill=darkred},
+    sectionstyle/.style = {fill=none, draw=none, minimum height=2cm},
+}
+
+% https://tex.stackexchange.com/questions/33607/easy-curves-in-tikz
+
+\begin{tikzpicture}
+
+\node (falsification) [sectionstyle, label={[font=\color{\primarycolor}]above:\textsc{Falsification}}] {
+\begin{tikzpicture}
+    \node (start) [startstyle] {};
+
+    \node (success) [successstyle, above right=3mm and 25mm of start, label={right:{\color{darkgreen}success}}] {};
+    \node (failure) [failurestyle, below right=3mm and 25mm of start, label={right:{\color{darkred}failure}}] {};
+
+    \draw [semithick,\primarycolor,->] plot [smooth] coordinates {(start.east) ($(start.east)+(3mm,0mm)$)  ($(start.east)+(6mm,-3mm)$) ($(start.east)+(13mm,1mm)$) ($(start.east)+(20mm,-10mm)$) (failure.south west)};
+\end{tikzpicture}
+};
+
+\draw [gray] ($(falsification.east) + (0.4cm,-2)$) -- ($(falsification.east) + (0.4cm,2)$);
+
+\node (mostlikely) [sectionstyle, right=of falsification, label={[align=center,font=\color{\primarycolor}]above:\textsc{Most-likely}\\\textsc{Failure Analysis}}] {
+\begin{tikzpicture}
+    \node (start) [startstyle] {};
+    
+    \node (success) [successstyle, above right=3mm and 25mm of start, label={right:{\color{darkgreen}success}}] {};   
+    \node (failure) [failurestyle, below right=3mm and 25mm of start, label={right:{\color{darkred}failure}}] {};
+
+    \draw [semithick,\primarycolor,->] plot [smooth] coordinates {(start.east) ($(start.east)+(10mm,1mm)$) (failure.north west)};
+\end{tikzpicture}
+};
+
+\draw [gray] ($(mostlikely.east) + (0.4cm,-2)$) -- ($(mostlikely.east) + (0.4cm,2)$);
+
+\node (failureprob) [sectionstyle, right=of mostlikely, label={[align=center,font=\color{\primarycolor}]above:\textsc{Failure Probability}\\\textsc{Estimation}}] {
+\begin{tikzpicture}
+    \node (start) [startstyle] {};
+    
+    \node (success) [successstyle, above right=3mm and 25mm of start, label={right:{\color{darkgreen}success}}] {};
+    \node (failure) [failurestyle, below right=3mm and 25mm of start, label={right:{\color{darkred}failure}}] {};
+
+    \draw [semithick,gray4,->] plot [smooth] coordinates {(start.east) ($(start.east)+(3mm,0mm)$)  ($(start.east)+(6mm,-3mm)$) ($(start.east)+(13mm,1mm)$) ($(start.east)+(20mm,-10mm)$) (failure.south west)};
+    \draw [semithick,gray4,->] plot [smooth] coordinates {(start.east) ($(start.east)+(5mm,-2mm)$) ($(start.east)+(16mm,-12mm)$) (failure.south)};
+    \draw [semithick,gray3,->] plot [smooth] coordinates {(start.east) ($(start.east)+(15mm,6mm)$) (failure.north)};
+    \draw [semithick,gray2,->] plot [smooth] coordinates {(start.east) ($(start.east)+(5mm,-1mm)$) ($(start.east)+(15mm,-9mm)$) (failure.south west)};
+    \draw [semithick,gray1,->] plot [smooth] coordinates {(start.east) ($(start.east)+(6mm,-1mm)$) ($(start.east)+(15mm,-6mm)$) (failure.west)};
+    \draw [semithick,\primarycolor,->] plot [smooth] coordinates {(start.east) ($(start.east)+(10mm,1mm)$) (failure.north west)};
+\end{tikzpicture}
+};
+
+\end{tikzpicture}

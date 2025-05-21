@@ -1,0 +1,27 @@
+\begin{algorithm}[H]
+    \caption{$\Delta$-MCTS recursive simulation.}
+    \label{alg:delta-mcts-simulate}
+    \begin{algorithmic}[1]
+        \Function{Simulate}{$f_\theta, b, d$}
+            \State \textbf{if}\ $\textproc{Terminal}(b)$\ \textbf{return}\ $0, \new{0}$
+            \If {$b \not\in \mathcal{T}$ \textbf{or} $d=0$}
+                \State $\mathcal{T} \leftarrow \mathcal{T} \cup \{b\}$
+                \State $N(b) \leftarrow N_0(b)$
+                \State $\tilde{b} \leftarrow \phi(b)$ \Comment{input belief representation}
+                \State \Return $V_\theta(\tilde{b}), \new{F_\theta(\tilde{b})}$  \label{line:delta_mcts_lookup} \Comment{network lookup}
+            \EndIf
+            \State $N(b) \leftarrow N(b) + 1$
+            \State $a \leftarrow \textproc{ActionSelection}(f_\theta, b)$ \Comment{selection}
+            \State $(b^\prime, r, \new{p}) \leftarrow \textproc{BeliefStateExpansion}(b,a)$ \Comment{expansion}
+            \State $v', \new{p'} \leftarrow \textproc{Simulate}(f_\theta, b^\prime, d-1)$ \Comment{simulation}
+            \State $q \leftarrow r + \gamma v'$
+            \State \new{$p \leftarrow p + \delta(1 - p)p'$} \Comment{observed failure probability}
+            \State $N(b,a) \leftarrow N(b,a)+1$
+            \State $Q(b,a) \leftarrow Q(b,a)+\frac{q-Q(b,a)}{N(b,a)}$ 
+            \label{line:delta_mcts_backprop} \Comment{backpropagation: $Q$-value}
+            \State \new{$F(b,a) \leftarrow F(b,a) + \frac{p - F(b,a)}{N(b,a)}$} \Comment{backpropagation: $F$-value} \label{line:f_value}
+            \State \new{$\textproc{Adaptation}(\Delta, b, a)$} \Comment{adaptation}
+            \State \Return $q, \new{p}$
+        \EndFunction
+    \end{algorithmic}
+\end{algorithm}

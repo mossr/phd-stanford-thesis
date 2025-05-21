@@ -1,0 +1,43 @@
+\chapter{Future Work}\label{ch:future}
+\chapterquote{Gas will expand to fill available space, work will expand to fill available time.}{Keith Schwarz}
+
+This thesis presented research to address safe planning under uncertainty and efficient safety validation, but as with all research, it is only the beginning.
+This chapter outlines several limitations of our work, possible next steps, and potential future research directions.
+
+\paragraph{Neural network verification.}
+Despite the convergence guarantees of adaptive conformal inference in ConstrainedZero \cite{gibbs2021adaptive}, planning with approximations does not provide safety guarantees.
+Although our experiments suggest that adaptation helps find safe policies, studying formal methods for neural network verification is important \cite{liu2021algorithms}.
+Applying nonlinear reachability methods such as Taylor models, conservative linearization, or partitioning \cite{althoff2021set,makino2003taylor,everett2021reachability,valbook} could help make the surrogates more robust.
+Work from \textcite{katz2017reluplex} could be applied to simplified neural network surrogates used in this work.
+Verification provides guarantees and an additional level of analysis complementary to validation, and should be studied before deploying neural networks into safety-critical systems.
+
+\paragraph{Interpretable surrogate models.}
+Especially in the safety case, having \textit{interpretable} surrogate models \cite{bougie2023interpretable} can be useful for stakeholders to better understand and analyze the safe decision making of the system.
+An important question to research is: \textit{``How can interpretable surrogate models be used for safe planning?''}
+Interpretable models, such as shallow decision trees \cite{de2013decision}, may be of interest.
+When replacing complex surrogates like neural networks with simpler, more interpretable models, there tends to be a trade-off between interpretability (i.e., model complexity) and performance.
+Studying this trade-off in the safety case is incredibly important.
+
+\paragraph{Offline chance-constrained methods.}
+Learning offline policies that guarantee satisfaction of safety constraints is another challenge that could be studied.
+\textcite{ono2015chance} developed a method to solve chance-constrained MDPs given a target level of safety, yet their work could be extended to POMDPs and to multiple constraints.
+Motivated by the ACAS~X safety case, \textcite{kochenderfer2012next} used QMDP \cite{littman1995learning} to train an offline policy that is augmented online with additional information.
+Providing offline policy guarantees can help establish the safety case in fields such as aviation.
+Such policies can then be verified to exhaust all combinations of a value-based lookup table \cite{jeannin2015formal}.
+
+\paragraph{Belief representations.}
+Extensions to algorithms such as BetaZero and ConstrainedZero could focus on addressing the belief representation as input to the neural network surrogates.
+Future work could use the latent representation from deep conditional generative models like the $\mathcal{I}$-VAE introduced in \cref{ch:ivae}.
+Other work, such as flow-based models \cite{chen2022flow}, principle component analysis \cite{roy2005finding}, or order-invariant network layers \cite{zaheer2017deep}, could also be studied as methods to represent the complex belief distributions.
+
+\paragraph{Continuous action spaces.}
+This thesis primarily deals with problems that have discrete action spaces.
+Yet, more complicated systems may operate over \textit{continuous} actions.
+Therefore, studying methods to extend our work to the continuous action domain would be useful.
+\textcite{moerland2018a0c} introduced an extension to AlphaZero that handles continuous actions, and their work could be directly applied to the BetaZero and ConstrainedZero algorithms.
+Future work could therefore study how to apply our methods to safety-critical robotics tasks such as control \cite{sylvie2010planning} and object manipulation \cite{pajarinen2017robotic,pajarinen2022pomdp}.
+
+\paragraph{Surrogates for environment models.}
+Another avenue of future work is the use of surrogate models to replace expensive geological simulators, such as those used by \textcite{wen2021ccsnet} for the CCS problem.
+Research into approximate \textit{world models} \cite{ha2018world} could be directly applicable to our work and provide additional computational gains.
+Therefore, it is important to study how best to represent the state-transition dynamics using surrogate models.

@@ -1,0 +1,168 @@
+\chapter{Contributions}\label{ch:contributions}
+\chapterquote{The impulse of the maker is hard to quell.}{Mark Miller}
+
+In an attempt to improve safe planning under uncertainty and safety validation using surrogate models, we have contributed the following research:
+
+\paragraph{Framework for batched belief-state planning.}
+In \cref{ch:bbmdp}, we introduced the \textit{batched planning} framework to scale planning problems to available compute.
+We then developed extensions for batched belief-state planning in POMDPs.
+We proved that the optimal policy is preserved in the batched planning framework, enabling faster execution without compromising policy performance.
+
+\paragraph{Conditional surrogate model for belief updating.}
+In \cref{ch:ivae}, we introduced the \textit{inversion variational autoencoder} ($\mathcal{I}$-VAE) model that approximates sampling from the posterior belief, allowing us to use the batched belief-state planning framework.
+We study how deep conditional generative models can be used as inversion methods to go from partial observations to samples from a distribution over states.
+We showed that learning latent representations of the distribution over observations allows us to visualize the latent space for further analysis.
+We demonstrated that fine-tuning the $\mathcal{I}$-VAE model to maximize mutual information across observation trajectories results in better planning and estimation performance.
+We tested our approach against several benchmark belief updaters and policies, and developed an optimal one-step Bayesian information gaining heuristic.
+We applied our method to a challenging planning problem of muon-based intrusion discovery and observed that the $\mathcal{I}$-VAE achieves high conditional likelihood and low belief error using only a few observations.
+
+
+\paragraph{Method for scalable belief-state planning and learning.}
+In \cref{ch:betazero}, we introduced a scalable and generalizable POMDP planning algorithm that replaces hand-crafted heuristics with learned approximations.
+We developed the \textit{BetaZero} policy iteration algorithm that combines online MCTS planning with offline learned neural network surrogates to enable long-horizon planning.
+We addressed several challenges with partial observability and demonstrated how BetaZero can generalize to different benchmark POMDP problems.
+We showed that BetaZero can learn an approximately optimal value function and action selection policy and that additional online planning with the neural network surrogates outperforms both the raw networks and traditional online planning methods.
+
+
+\paragraph{Method for safety-aware planning in partially observable problems.}
+In \cref{ch:constrainedzero}, we extended BetaZero to the chance-constrained POMDP (CC-POMDP) setting and introduced \textit{ConstrainedZero}.
+We learned a neural network surrogate that also predicts the failure probability given a belief.
+We used this surrogate during MCTS planning and introduced the $\Delta$-MCTS algorithm for safety-aware tree search.
+We showed that ConstrainedZero can learn the approximately Pareto-optimal policy by maximizing rewards within the target level of safety.
+We highlighted how separating safety from the reward function when formalizing the CC-POMDP allows for more interpretable objectives when developing safe policies.
+We demonstrated our method on several benchmark safety-critical CC-POMDPs and showed that it can easily be applied to chance-constrained MDPs.
+
+
+\paragraph{Method for black-box safety validation using probabilistic surrogate models.}
+In \cref{ch:bsv}, we introduced the \textit{Bayesian safety validation} method to estimate the failure probability of complex black-box systems.
+We combined probabilistic surrogate models with three new acquisition functions to iteratively sample new design points from the inexpensive surrogate to refine the predicted failure regions.
+We demonstrated that Bayesian safety validation can achieve low error in the failure probability estimate while simultaneously achieving high failure rate and collecting high-likelihood failures.
+We tested our method on a neural network-based runway detection system used within an autonomous aircraft stack.
+
+
+\section{Open-Source Contributions}
+The code and experiments developed for this thesis are open-sourced and available online.
+
+\begin{itemize}
+    \item \colorurl{https://github.com/sisl/I-VAE}: PyTorch implementation of the $\mathcal{I}$-VAE model.
+    \item \colorurl{https://github.com/sisl/MuonPOMDPs.jl}: POMDP models of the muon-based intrusion discovery problem, batched belief-state planning framework, and experiments.
+    \item \colorurl{https://github.com/sisl/BetaZero.jl}: The BetaZero POMDP algorithm, experiments, and environments; integrated into the Julia \texttt{POMDPs.jl} ecosystem.
+    \item \colorurl{https://github.com/sisl/ConstrainedZero.jl}: The ConstrainedZero CC-POMDP algorithm, experiments, and environments; integrated into \texttt{POMDPs.jl}.
+    \item \colorurl{https://github.com/sisl/BayesianSafetyValidation.jl}: The Bayesian safety validation algorithm and experiments.
+\end{itemize}
+
+\section{Publications}
+
+\noindent The contents of \cref{ch:bbmdp,ch:ivae} are new and yet to be published.
+
+\phantom{---}
+
+\noindent The content of \cref{ch:betazero} appeared in:
+\begin{quote}
+    \cite{moss2024betazero} R. J. Moss, A. Corso, J. Caers, and M. J. Kochenderfer, ``BetaZero: Belief-State Planning for Long-Horizon POMDPs using Learned Approximations,'' \textit{Reinforcement Learning Journal (RLJ)}, vol. 1, pp. 158--181, 2024.\\
+    \colorurl{https://rlj.cs.umass.edu/2024/papers/Paper27.html}
+\end{quote}
+
+\phantom{---}
+
+\noindent The content of \cref{ch:constrainedzero} appeared in:
+\begin{quote}
+    \cite{moss2024constrainedzero} R. J. Moss, A. Corso, J. Caers, and M. J. Kochenderfer, ``ConstrainedZero: Chance-Constrained POMDP Planning using Learned Probabilistic Failure Surrogates and Adaptive Safety Constraints,'' In \textit{International Joint Conference on Artificial Intelligence (IJCAI)}, pp. 6752--6760, 2024.\\
+    \colorurl{https://doi.org/10.24963/ijcai.2024/746}
+
+    \phantom{---}
+
+    \cite{moss2024constrainedzeroworkshop} R. J. Moss, A. Corso, J. Caers, and M. J. Kochenderfer, ``Chance-Constrained POMDP Planning with Learned Neural Network Surrogates,'' In \textit{IJCAI Workshop on Trustworthy Interactive Decision-Making with Foundation Models}, 2024.\\
+    \colorurl{https://openreview.net/forum?id=w5a6C4tiat}
+\end{quote}
+
+\phantom{---}
+
+\noindent The content of \cref{ch:bsv} appeared in:
+\begin{quote}
+    \cite{moss2024bayesian} R. J. Moss, M. J. Kochenderfer, M. Gariel, and A. Dubois, ``Bayesian Safety Validation for Failure Probability Estimation of Black-Box Systems,'' \textit{AIAA Journal of Aerospace Information Systems (JAIS)}, vol. 21, no. 7, pp. 533--546, 2024.\\
+    \colorurl{https://doi.org/10.2514/1.I011395}
+
+    \phantom{---}
+
+    \cite{moss2023bayesian} R. J. Moss, A. Corso, J. Caers, and M. J. Kochenderfer, ``Bayesian Safety Validation for Black-Box Systems,'' In \textit{AIAA AVIATION Forum}, 2023.\\
+    \colorurl{https://doi.org/10.2514/6.2023-3596}
+\end{quote}
+
+\phantom{---}
+
+\subsection{Non-Thesis Publications}
+During my time as a graduate student, I was lucky enough to explore several different research directions, including co-authoring a new textbook on \textit{Algorithms for Validation} \cite{valbook}.
+The following work is excluded from this thesis.
+
+
+\begin{quote}
+    \cite{valbook} M. J. Kochenderfer, S. M. Katz, A. L. Corso, and R. J. Moss, \textit{Algorithms for Validation}. MIT Press, 2025.\\
+    \colorurl{https://algorithmsbook.com/validation/}
+
+    \phantom{---}
+
+    S. Hwang, R. J. Moss, D. Fan, and S. Follmer, ``Computational Modeling of Non-Visual Vibrotactile Touchscreen Exploration,'' \textit{Conference on Human Factors in Computing Systems (CHI)}, 2025.\\
+    \colorurl{https://dl.acm.org/doi/10.1145/3706599.3719851}
+
+    \phantom{---}
+
+    R. J. Moss, ``\textsc{Kov}: Transferable and Naturalistic Black-Box LLM Attacks Using Markov Decision Processes and Tree Search,'' \textit{arXiv preprint arXiv:2408.08899},~2024.\\
+    \colorurl{https://arxiv.org/abs/2408.08899}
+
+    \phantom{---}
+
+    R. J. Moss, M. Kozlova, A. Corso, and J. Caers, ``Model-fidelity analysis for sequential decision-making systems using Simulation Decomposition: Case study of critical mineral exploration,'' \textit{Sensitivity Analysis for Business, Technology, and Policymaking}, Routledge, 2024.\\
+    \colorurl{https://doi.org/10.4324/9781003453789-12}
+
+    \phantom{---}
+
+    M. Kozlova, R. J. Moss, P. Roy, A. Alam, and J. S. Yeomans, ``SimDec algorithm and guidelines for its usage and interpretation,'' \textit{Sensitivity Analysis for Business, Technology, and Policymaking}, Routledge, 2024.\\
+    \colorurl{https://doi.org/10.4324/9781003453789-3}
+
+    \phantom{---}
+
+    M. Kozlova, R. J. Moss, J. S. Yeomans, and J. Caers, ``Uncovering heterogeneous effects in computational models for sustainable decision-making,'' \textit{Environmental Modelling \& Software}, 2024.\\
+    \colorurl{https://doi.org/10.1016/j.envsoft.2023.105898}
+
+    \phantom{---}
+
+    \cite{durand2023formal} J.-G. Durand, A. Dubois, and R. J. Moss, ``Formal and Practical Elements for the Certification of Machine Learning Systems,'' \textit{AIAA/IEEE Digital Avionics Systems Conference (DASC)}, 2023.\\
+    \colorurl{https://doi.org/10.1109/DASC58513.2023.10311201}
+
+    \phantom{---}
+
+    L. J. Einstein, R. J. Moss, and M. J. Kochenderfer, ``Prioritizing emergency evacuations under compounding levels of uncertainty,'' \textit{IEEE Global Humanitarian Technology Conference (GHTC)}, 2022.\\
+    \colorurl{https://doi.org/10.1109/GHTC55712.2022.9910611}
+
+    \phantom{---}
+
+    \cite{corso2021survey} A. Corso, R. J. Moss, M. Koren, R. Lee, and M. J. Kochenderfer, ``A Survey of Algorithms for Black-Box Safety Validation of Cyber-Physical Systems,'' \textit{Journal of Artificial Intelligence Research (JAIR)}, vol. 72, pp. 377--428, 2021.\\
+    \colorurl{https://doi.org/10.1613/jair.1.12716}
+
+    \phantom{---}
+
+    R. J. Moss, S. Gupta, R. Dyro, K. Leung, M. J. Kochenderfer, G. X. Gao, M. Pavone, E. Schmerling, A. Corso, R. Madigan, M. Stroila, and T. Gibson, ``Autonomous Vehicle Risk Assessment,'' \textit{Stanford Center for AI Safety}, 2021.\\
+    \colorurl{https://web.stanford.edu/~mossr/pdf/av_risk_assessment.pdf}
+
+    \phantom{---}
+
+    R. J. Moss, ``POMDPStressTesting.jl: Adaptive Stress Testing for Black-Box Systems,'' \textit{Journal of Open-Source Software (JOSS)}, vol. 6, no. 60, 2021.\\
+    \colorurl{https://doi.org/10.21105/joss.02749}
+
+    \phantom{---}
+
+    M. Durling, H. Herencia-Zapana, B. Meng, M. Meiners, J. Hochwarth, N. Visser, R. Lee, R. J. Moss, and V. T. Valapil, ``Certification Considerations for Adaptive Stress Testing of Airborne Software,'' \textit{AIAA/IEEE Digital Avionics Systems Conference (DASC)}, 2021.\\
+    \colorurl{https://doi.org/10.1109/DASC52595.2021.9594395}
+
+    \phantom{---}
+
+    R. J. Moss, R. Lee, N. Visser, J. Hochwarth, J. G. Lopez, and M. J. Kochenderfer, ``Adaptive Stress Testing of Trajectory Predictions in Flight Management Systems,'' \textit{AIAA/IEEE Digital Avionics Systems Conference (DASC)}, 2020.\\
+    \colorurl{https://doi.org/10.1109/DASC50938.2020.9256730}
+
+    \phantom{---}
+
+    \cite{moss2020crossentropy} R. J. Moss, ``Cross-Entropy Method Variants for Optimization,'' \textit{arXiv preprint arXiv:2009.09043}, 2020.\\
+    \colorurl{https://arxiv.org/abs/2009.09043}
+\end{quote}
+

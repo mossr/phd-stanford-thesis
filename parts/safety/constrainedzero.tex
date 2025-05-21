@@ -1,0 +1,615 @@
+\chapter{Safe Planning using Failure Surrogates}\label{ch:constrainedzero}
+\chapterquote{If you're always aiming for perfection, you won't make anything at all.}{Gabrielle Zevin}
+
+To plan safely in uncertain environments, agents must balance utility with safety constraints.
+Safe planning problems can be modeled as a chance-constrained partially observable Markov decision process (CC-POMDP) and solutions often use expensive rollouts or heuristics to estimate the optimal value and action-selection policy.
+This chapter introduces the \textit{ConstrainedZero} policy iteration algorithm---a natural extension to BetaZero---that solves CC-POMDPs in belief space by learning neural network approximations of the optimal value and policy, with an additional network head that estimates the failure probability given a belief.
+This failure probability guides safe action selection during online Monte Carlo tree search (MCTS).
+To avoid letting failure estimates dominate the search, we introduce $\Delta\text{-MCTS}$, which uses adaptive conformal inference to update the failure threshold during planning.
+The approach is tested on a safety-critical POMDP benchmark, an aircraft collision avoidance system, the sustainability problem of safe CO$_2$ storage, and an aerial wildfire suppression problem treated as a chance-constrained MDP.
+As a natural extension to BetaZero from \cref{ch:betazero}, results from our ConstrainedZero experiments indicate that by separating safety constraints from the objective, we can achieve a target level of safety without directly optimizing the balance between rewards and costs.
+
+\section{Motivation}
+When developing safety-critical agents to make sequential decisions in uncertain environments, planning and reinforcement learning algorithms often formulate the problem as a partially observable Markov decision process (POMDP) with the objective of maximizing a scalar-valued reward function \cite{dmbook}.
+POMDP solution methods find a policy that maximizes the expectation of this reward.
+To ensure adequate safety, the scalar reward is tuned to balance the goals of the agent while penalizing undesired behavior or failures.
+Recently, chance-constrained POMDPs (CC-POMDPs) have been used to frame the safe planning problem by separating the reward function into a constrained problem \cite{santana2016rao}.
+The objective of CC-POMDPs is to maximize the goal rewards while satisfying the safety constraints.
+
+To solve CC-POMDPs, online algorithms such as RAO$^*$ use heuristic forward search to find policies that maximize the reward and estimate the risk of constraint violation \cite{santana2016rao}.
+RAO$^*$ plans over the reachable belief space for discrete state, action, and observation CC-POMDPs.
+The iterative RAO$^*$ (iRAO$^*$) extends the heuristic search algorithm to multi-agent settings and handles continuous states and actions through Gaussian process regression and probabilistic flow tubes \cite{huang2018hybrid}.
+\textcite{lauri2022partially} highlight the limitations of such chance-constrained POMDP algorithms and the need for scalable approaches to solve large-scale, long-horizon CC-POMDPs in practice. 
+
+To address scalability and applicability to continuous state and observation spaces, we introduce the \textit{ConstrainedZero} policy iteration algorithm that combines offline neural network training of the value function, the action-selection policy, and the failure probability predictor with online Monte Carlo tree search (MCTS) to improve the policy through planning.
+ConstrainedZero is a direct extension to the POMDP belief-state planning algorithm BetaZero and the family of AlphaZero algorithms \cite{silver2018general}, with extensions shown in red in \cref{fig:cz-alg}.
+Along with an open-source implementation,\footnote{\url{https://github.com/sisl/ConstrainedZero.jl}} our main contributions are:
+\begin{enumerate}
+    \item We introduce $\Delta$-MCTS, an anytime algorithm for MDPs (applied to belief-state MDPs) that estimates failure probabilities along with $Q$-values and adjusts the failure probability threshold using adaptive conformal inference \cite{gibbs2021adaptive}. $\Delta$-MCTS selects actions by maximizing the $Q$-value while satisfying that the failure probability constraint is below the adapted threshold using the introduced CC-PUCT criterion.
+    \item We introduce ConstrainedZero, a policy iteration algorithm that extends BetaZero for CC-POMDPs. ConstrainedZero includes an additional network head that estimates the failure probability given a belief and uses $\Delta$-MCTS with the neural network surrogate to prioritize promising safe actions, replacing expensive rollouts or domain-specific heuristics.
+    Framing the problem as a CC-POMDP means a target safety level can be specified instead of balancing penalties in the reward function.
+    \item We evaluate ConstrainedZero and $\Delta$-MCTS on three challenging safety-critical benchmark CC-POMDPs: a long-horizon localization task (LightDark \cite{platt2010belief}), an aircraft collision avoidance system (modeled after ACAS X \cite{kochenderfer2012next}), and safe CO$_2$ storage \cite{corso2022pomdp}, and test on a chance-constrained MDP problem of wildfire suppression \cite{griffith2017automated}.
+\end{enumerate}
+
+
+\begin{figure}[h!]
+    \centering
+    \resizebox{0.825\linewidth}{!}{
+        \includegraphics{diagrams/constrainedzero/constrainedzero-diagram.pdf}
+    }
+    \caption{Elements of \textit{ConstrainedZero} for CC-POMDP planning.}
+    \label{fig:cz-alg}
+    \vspace*{-4mm}
+\end{figure}
+
+
+\section{Problem Formulation}
+This section formulates the safe planning problem as a belief-state CC-MDP.
+Background context is also provided on the Monte Carlo tree search algorithm.
+
+\paragraph{Review of POMDPs and belief-state MDPs.}
+To formulate chance-constrained problems, we extend the POMDP framework (\cref{sec:pomdps}).
+POMDPs are used for sequential decision making problems where the agent has uncertainty over their state in the environment \cite{dmbook}.
+The POMDP is a tuple $\langle \mathcal{S}, \mathcal{A}, \mathcal{O}, T, R, O, \gamma \rangle$ consisting of a state space $\mathcal{S}$,
+an action space $\mathcal{A}$,
+an observation space $\mathcal{O}$,
+a transition model $T$,
+a reward model $R$,
+an observation model $O$,
+and a discount factor $\gamma \in [0, 1)$.
+When solving POMDPs, the objective is to find a policy $\pi(b)$ given a belief $b$ over the unobserved state and return an action $a \in \mathcal{A}$ that maximizes the \textit{value} of the belief, which is the expected discounted sum of rewards (i.e., the expected discounted \textit{returns}) when continuing to follow the policy $\pi$:
+\begin{equation}
+    \pi(b_0) = \argmax_{a \in \mathcal{A}} \ \mathbb{E}_\pi\!\left[\sum_{t=0}^\infty \gamma^t R_b(b_t, a_t) \mid b_0 \right]
+\end{equation}
+where $b_0$ is the initial belief, often using the initial state distribution, and the belief-based reward is defined as:
+\begin{equation}
+R_b(b,a) = \int b(s)R(s,a) \diff s \label{eq:bmdp_belief_reward}
+\end{equation}
+
+Every POMDP can be cast as an MDP by simply treating the belief as the state.
+In doing so, one can construct a belief-state MDP (BMDP) with the belief space $\mathcal{B}$ of the original POMDP as the MDP state space, while using the same action space $\mathcal{A}$, the belief-based reward model $R_b$ from \cref{eq:bmdp_belief_reward}, and a transition function $b' \sim T_b(\cdot \mid b, a)$ that takes the current belief $b$ and action $a$ and returns a stochastic updated belief $b'$.
+The belief transition function first samples a hidden state $s \sim b(\cdot)$ and transitions that state through the POMDP transition function $s' \sim T(\cdot \mid s, a)$.
+Then an observation is sampled from the observation model $o \sim O(\cdot \mid a, s')$, and finally, the belief is updated to get the posterior:
+\begin{equation}
+    b'(s') \propto O(o \mid a, s') \int T(s' \mid s, a)b(s) \diff s \label{eq:constrainedzero_belief_update}
+\end{equation}
+The belief update may be done exactly as in \cref{eq:constrainedzero_belief_update} or using approximations such as a Kalman filter \cite{wan2000unscented} or particle filter \cite{thrun2005probabilistic}, as described in \cref{sec:belief_updating}.
+
+The belief-state MDP tuple of $\langle \mathcal{B}, \mathcal{A}, T_b, R_b, \gamma \rangle$ can also be defined using a generative model $(b', r) \sim G_b(b, a)$ instead of an explicit belief transition model $T_b$ and belief reward model $R_b$.
+The underlying POMDP can also use a generative model $(s', r, o) \sim G(s, a)$.
+Our work uses the generative POMDP $\langle \mathcal{S}, \mathcal{A}, \mathcal{O}, G, \gamma \rangle$ and the generative BMDP $\langle \mathcal{B}, \mathcal{A}, G_b, \gamma \rangle$.
+
+
+\subsection{Chance-Constrained POMDPs}
+When dealing with safety-critical sequential decision making problems, separating safety constraints from the objective allows for solvers to target an adequate level of safety while simultaneously maximizing rewards.
+This is in contrast to designing a single reward function to balance the rewards from the goals and penalties from violating safety. 
+The chance-constrained POMDP (CC-POMDP) defines a failure set $\mathcal{F}$ that includes all state-action pairs $(s, a) \in \mathcal{S} \times \mathcal{A}$ that fail and a bound $\Delta \in [0, 1]$ on the probability, or \textit{chance}, of a failure event occurring.
+Chance constraints are intuitive for subject matter experts to define as they translate to the target failure probability of the agent, which is often the requirement for systems in industries such as aviation \cite{busch1985methodology} and finance \cite{flannery1989capital}.
+The objective when solving CC-POMDPs is to maximize the value function while ensuring that the failure probability, or the chance constraint, is below the target threshold $\Delta$:
+{\small
+\begin{alignat}{1}
+    \operatornamewithlimits{maximize}_\pi \,\, V^\pi(b_0) &= \mathbb{E}_\pi \Bigg[ \sum_{t=0}^\infty \gamma^t R_b(b_t, a_t) \mid b_0 \Bigg] \\
+    \operatorname{subject~to} \,\, F^\pi(b_0) &= \mathbb{P}_\pi \!\left[ \betterbigvee_{t=0}^\infty \Big( (s_t, a_t) \in \mathcal{F} \Big) \mid b_0 \right] \le \Delta
+\end{alignat}
+}%
+The failure probability $F^\pi(b_t)$ is often called the \textit{execution risk} \cite{santana2016rao} of the policy $\pi$ computed from the belief $b_t$.
+Together, the CC-POMDP is defined as the tuple $\langle \mathcal{S}, \mathcal{A}, \mathcal{O}, \mathcal{F}, T, R, O, \gamma, \Delta \rangle$, which may also use a generative model $G$ to replace $\langle T,R,O \rangle$.
+
+\paragraph{Chance-constrained belief-state MDPs.}
+Our work casts the chance-constrained POMDP to a chance-constrained belief-MDP (CC-BMDP).
+The CC-BMDP tuple $\langle \mathcal{B}, \mathcal{A}, F_b, T_b, R_b, \gamma, \Delta \rangle$ extends BMDPs with an immediate failure probability function $F_b: \mathcal{B} \times \mathcal{A} \to [0, 1]$ and a failure probability threshold~$\Delta$.
+The immediate failure probability is computed as
+\begin{equation}
+    F_b(b, a) = \int b(s) \mathds{1}\big\{(s,a) \in \mathcal{F}\big\} \diff s
+\end{equation}
+using the failure set $\mathcal{F}$ and indicator function $\mathds{1}\{\cdot\}$ returning $1$ if \texttt{true} and $0$ otherwise.
+The CC-BMDP can also be defined with a generative model $(b', r, p) \sim G_b(b,a)$ that also returns the failure probability $p = F_b(b,a)$ with notation overloading of $G_b$, resulting in the tuple $\langle \mathcal{B}, \mathcal{A}, G_b, \gamma, \Delta \rangle$.
+In this chapter, we introduce scalable chance-constrained planning algorithms to solve high-dimensional CC-POMDPs.
+
+
+\paragraph{Review of Monte Carlo tree search.}
+The best-first search algorithm, Monte Carlo tree search (MCTS), is designed to solve MDPs \cite{coulom2007efficient} and has been applied to solve POMDPs cast as belief-state MDPs \cite{sunberg2018online,fischer2020information,moss2024betazero}.
+MCTS is an online algorithm that determines the best action to take from the current state $s$ (or belief state $b$).
+MCTS iteratively simulates the following four steps to build out a tree of possible reachable futures to a depth $d$:
+\begin{enumerate}
+    \item \textbf{Selection.}\quad 
+    An action is selected from the existing children of the current state node or sampled from the action space.
+    The selection process balances exploration and exploitation.
+    Metrics such as UCT \cite{kocsis2006bandit} or PUCT \cite{silver2017mastering} have been used in the literature to select the action to take. 
+    \item \textbf{Expansion.}\quad 
+    Once an action is selected, it is executed from the current state node to expand the tree.
+    For stochastic state transitions, methods like progressive widening \cite{couetoux2011continuous} or state abstraction refinement \cite{sokota2021monte} can be used to control when to execute the action or when to take an existing tree path.
+    \item \textbf{Simulation.}\quad 
+    From the expanded state, the tree is recursively built from this new root node, and the
+    simulation step returns an estimate of the value of the expanded state.
+    The value estimate could use a rollout policy \cite{silver2016mastering} (which may be expensive for BMDPs), or use function approximators such as neural networks \cite{silver2017mastering,fischer2022guiding,moss2024betazero}.
+    \item \textbf{Backpropagation.}\quad 
+    Finally, the value estimate is combined with the immediate reward to get the $Q$-value.
+    This $Q$-value is assigned to the parent state-action node as a running mean.
+    This process backpropagates the signal up the tree path that led to that node. 
+\end{enumerate}
+After a prescribed number of iterations, MCTS will select the best action from the children of the root node, often using the $Q$-values or visit counts \cite{browne2012survey}.
+
+\textcite{brazdil2020reinforcement} introduced an algorithm for CC-MDPs that uses UCT with a table-based value and risk predictor, and a linear program to compute an action distribution that satisfies an adaptive constraint.
+\textcite{ayton2018vulcan} introduced an MCTS algorithm for CC-MDPs that selects actions that satisfy a local chance constraint over state histories and prune branches that violate the constraint.
+MCTS algorithms have also been developed for cost-constrained POMDPs (C-POMDPs) \cite{isom2008piecewise}, where a discounted cost is minimized.
+Algorithms such as C-POMCP \cite{lee2018monte}, C-MCTS \cite{parthasarathy2023cmcts}, C-POMCPOW, C-PTF-DPW, and C-POMCP-DPW \cite{jamgochian2023online} estimate the cost function during search using rollouts, while our approach uses \textit{chance} constraints and estimates violation \textit{probabilities} using surrogates.
+
+
+\section{Proposed Algorithm: ConstrainedZero}
+ConstrainedZero follows the BetaZero policy iteration steps of \textit{policy evaluation} and \textit{policy improvement} while also collecting failure event indicators to train the failure probability network head, shown in red in \cref{alg:constrainedzero}.
+During policy evaluation, $n$ parallel $\Delta$-MCTS executions are run and a data set $\mathcal{D}$ is collected.
+The data set $\mathcal{D} = \big\{\{b_t, \bpi_t, g_t, e_t\}_{t=1}^T \big\}_{j=1}^n$ is a tuple of the belief at episode time step $t$ denoted $b_t$, the tree policy $\bpi_t$, the return $g_t = \sum_{i=t}^T \gamma^{(i-t)}r_i$ based on the observed reward $r_i$ and discount factor $\gamma$, and the failure event indicator $e_t$, where $g_t$ and $e_t$ are computed at the end of the trajectory for all time $t \le T$.
+The failure event is computed as the disjunction of all $(s,a)$ pairs of the CC-POMDP in the execution trajectory to ensure that if a trajectory failed at some point the full trajectory is marked as a failure:
+\begin{equation}
+    e_t = \mathds{1} \left\{ \betterbigvee_{i=t}^T \Big( (s_i, a_i) \in \mathcal{F} \Big) \right\}
+\end{equation}
+where $\mathds{1}\{E\}$ is the indicator function that returns $1$ when event $E$ is \texttt{true} and $0$ otherwise.
+
+During policy improvement, the neural network is trained to minimize the MSE or MAE loss $\mathcal{L}_{V_\theta}(g_t, v_t)$ to regress the value function $v_t = V_\theta(\tilde{b}_t)$, minimize the cross-entropy loss $\mathcal{L}_{P_\theta}(\bpi_t, \mathbf{p}_t)$ to imitate the tree policy $\mathbf{p}_t = P_\theta(\tilde{b}_t)$, and additionally minimize the binary cross-entropy loss $\mathcal{L}_{F_\theta}(e_t, p_t)$ to regress the failure probability function $p_t = F_\theta(\tilde{b}_t)$, with added regularization using the $L_2$-norm of the weights $\theta$:
+\begin{gather*}
+    \mathcal{L}_{V_\theta}(g_t, v_t) = (g_t - v_t)^2 \text{ or } |g_t - v_t|\\
+    \mathcal{L}_{P_\theta}(\bpi_t, \mathbf{p}_t) = -\bpi_t^\top \log \mathbf{p}_t\\
+    \mathcal{L}_{F_\theta}(e_t, p_t) = -e_t \log p_t - (1-e_t)\log(1-p_t)\\
+    \mathcal{L}_\text{CZ} = \mathcal{L}_{V_\theta}(g_t, v_t) + \mathcal{L}_{P_\theta}(\bpi_t, \mathbf{p}_t) + \mathcal{L}_{F_\theta}(e_t, p_t) + \lambda\norm{\theta}^2
+\end{gather*}
+The failure probability head of the neural network includes a final sigmoid layer to ensure the output can be interpreted as a probability in the range $[0,1]$.
+
+\begin{figure}[t!]
+    \centering
+    \input{algorithms/constrainedzero/cz-policy-iteration}
+\end{figure}
+
+
+\subsection{Adaptive Safety Constraints in \texorpdfstring{$\Delta$}{Δ}-MCTS}
+When using online MCTS for CC-BMDP planning, two considerations have to be addressed: (1) how to estimate the observed failure probability in the tree search, and (2) how to select actions constrained by this failure probability. To address this, we introduce $\Delta$-MCTS, an extension of MCTS for chance-constrained belief-state MDPs.
+
+At each node for the belief-state and action $(b,a)$, the immediate failure probability $p$ is computed using the generative model (or by calling $p = F_b(b,a)$ directly). 
+An estimate of the future failure probability $p'$ can be computed using rollouts, which may be expensive for belief-state planning; thus, we use the trained neural network head for failure probability estimation $p' = F_\theta(\tilde{b}')$.
+Similar to the $Q$-value, we must compute the full failure probability of the trajectory from the immediate time step to the horizon, termed the $F$-value.
+Let $E$ be the immediate failure event from belief $b$ when taking action $a$ at time $t$, and let $E'$ be the event of failing in the future (from $t+1$ to the horizon $T$).
+The probability of failing between the current time $t$ and the horizon $T$ becomes:
+\begin{align}
+    P(E_{t:T}) &= P(E) + P(E') - P(E \cap E')\\
+               &= P(E) + P(E') - P(E')P(E \mid E')\\
+               &= P(E) + P(E') - P(E')P(E) \label{eq:p_indep}\\
+               &= p + p' - pp'\\
+               &= p + (1-p)p'
+\end{align}
+assuming independence in \cref{eq:p_indep}.
+It is well known that a discount factor can be interpreted as the $(1 - \delta)$ probability of termination on the next step \cite{littman1994markov,sutton2018reinforcement}.
+Therefore, we apply a discount $\delta$ to control the influence of the future failure probability:
+\begin{equation}
+    p = p + \delta(1-p)p' \label{eq:p_fail}
+\end{equation}
+
+Unlike \textcite{carpin2022solving}, who backup $F$-values based on the best-case, we backpropagate the $F$-values up the tree similar to $Q$-values (line \ref*{line:f_value}, alg. \ref{alg:delta-mcts}):
+\begin{equation}
+    F(b,a) = F(b,a) + \frac{p - F(b,a)}{N(b,a)} \label{eq:f_value}
+\end{equation}
+which is a running mean estimate where $F(b,a)$ is initialized using the initialization function $F_0(b,a)$, noting the $F_0$ subscript: which could either be zero, the immediate failure probability $F_b(b,a)$, or the bootstrapped value by taking action $a$ to get a new belief $b'$ and computing \cref{eq:p_fail} based on the $p' = F_\theta(\tilde{b}')$ estimate.
+Note, the number of times the node $(b,a)$ is visited is indicated as the visit count $N(b,a)$.
+
+Using the estimate $F(b,a)$, a simple way to select actions that do not violate the safety constraint set by $\Delta$ would be to use the PUCT algorithm \cite{silver2018general}:
+\begin{align}
+    \pi_\text{na\"ive-PUCT}(b) = \argmax_{a \in A(b)}& \ \widebar{Q}(b, a) + c \bigg(P_\theta(\tilde{b},a) \frac{\sqrt{N(b)}}{1 + N(b,a)} \bigg) \\
+    \operatorname{s.t.}& \ F(b,a) \le \Delta
+\end{align}
+with a hard constraint on safety of only choosing actions such that $F(b,a) \le \Delta$ is satisfied.
+Note that the belief node visit count is $N(b) = \sum_{a'} N(b,a')$ for children ${a' \in A(b)}$ and following \textcite{schrittwieser2020mastering}, we normalize the $Q$-values between zero and one, denoted $\widebar{Q}$, to avoid problem-specific heuristics when selecting an exploration constant $c$:
+\begin{gather}
+    \widebar{Q}(b,a) = \frac{Q(b, a) - \min_{(b',a') \in \mathcal{T}} Q(b', a')}{\max_{(b',a') \in \mathcal{T}} Q(b', a') - \min_{(b',a') \in \mathcal{T}} Q(b', a')}
+\end{gather}
+PUCT exploits nodes based on their observed $Q$-values and explores nodes based on their visit counts weighted by the action-selection policy $P_\theta$ to explore promising actions.
+
+However, if the failure probability threshold $\Delta$ is too conservative, the action-selection process may fail to find \textit{any} action that satisfies the constraint.
+Therefore, $\Delta$-MCTS tracks an estimate of the threshold $\Delta(b)$ for each belief node and updates it using \textit{adaptive conformal inference} (ACI) \cite{gibbs2021adaptive}.
+ACI is a distribution-free, sequential calibration method that guarantees valid coverage with high probability in online settings.
+This makes ACI well-suited for our task of adapting the failure probability threshold in an online MCTS setting.
+The adaptive threshold is initialized to the target tolerance $\Delta(b) = \Delta_0$ where $\Delta_0 = \Delta$ from the CC-BMDP.
+Each time the $F$-value is updated (either by \cref{eq:f_value} or initialization), the new \textproc{Adaptation} procedure is called to update the current acceptable safety threshold.
+
+In adaptation, the error term of $\text{err} = \mathds{1}\{F(b,a) > \Delta(b)\}$ indicates when to widen or restrict the estimated threshold $\Delta(b)$ based on whether the failure probability estimate of the most recently explored belief-action node $F(b,a)$ is above or below the current threshold.
+The estimated threshold is updated according to:
+\begin{equation}
+    \Delta(b) = \Delta(b) + \eta(\text{err} - \Delta_0) \label{eq:aci_update}
+\end{equation}
+which will widen the threshold if the observed failure probability is outside the threshold (i.e., if the error is one), and will tighten the threshold otherwise:
+\begin{equation}
+    \Delta(b) = \begin{cases}
+        \Delta(b) + \eta(1-\Delta_0) & \text{if } F(b,a) > \Delta(b)\\
+        \Delta(b) - \eta\Delta_0 & \text{if } F(b,a) \leq \Delta(b)
+    \end{cases} \label{eq:err}
+\end{equation}
+Intuitively, the update adjusts the threshold of acceptable failure probability $\Delta(b)$ based on recent experience.
+If the failure probability $F(b,a)$ for a recent action is higher than the current threshold $\Delta(b)$, this indicates a higher risk than expected.
+Thus, the threshold is increased by $\eta(1-\Delta_0)$ for $\eta > 0$ to allow for more risk in future actions.
+Otherwise, if $F(b,a)$ is lower than the threshold, this means actions are safer than expected and the threshold is decreased by $\eta\Delta_0$ (favoring a more reactive increase than decrease of the threshold).
+Notably, \textcite{gibbs2021adaptive} prove that $\Delta(b)$ converges exactly to the desired target over time.
+
+We clip the final threshold to the lower and upper bounds of the observed failure probability for a given belief $b$ to restrict the change in $\Delta(b)$ and, more importantly, to guarantee that at least one action is available for selection:
+\begin{equation}
+    \Delta(b) = \operatorname{clip}\!\big( \Delta(b) + \eta(\text{err} - \Delta_0),\, l(b),\, u(b) \big)
+\end{equation}
+with the lower and upper bounds of $l(b) = \min_{a'} F(b, a')$ and $u(b) = \max_{a'} F(b, a')$ for $a'$ in children nodes $A(b)$.
+
+\begin{figure}[t!]
+    \centering
+    \includegraphics[width=\textwidth]{diagrams/constrainedzero/delta-mcts.pdf}
+    \caption{$\Delta$-MCTS: Chance-constrained MCTS with failure threshold adaptation.}
+    \label{fig:delta-mcts}
+\end{figure}
+
+The resulting criterion selects actions that satisfy the adaptive constraint of $F(b,a) \le \Delta'(b)$ where the selection threshold $\Delta'(b) = \max \{\Delta_0, \Delta(b)\}$ upper bounds the failure probability.
+Together, the $\Delta$-MCTS exploration policy becomes:
+{\small\begin{align}
+    \pi_\text{explore}(b) = \argmax_{a \in A(b)}& \ \widebar{Q}(b, a) + c \Big(P_\theta(\tilde{b},a) \textstyle\frac{\sqrt{N(b)}}{1 + N(b,a)} \Big)\\
+                             \operatorname{s.t.}& \ F(b,a) \le \Delta'(b) \label{eq:constraint}
+\end{align}}%
+termed the \textit{chance-constrained PUCT} criterion (CC-PUCT).
+The constraint in \cref{eq:constraint} is also used in root node action selection (line \ref*{line:root_constraint}, alg. \ref{alg:delta-mcts}).
+In practice, $\pi_\text{explore}$ is computed using the indicator $\mathds{1}$, returning the action $a \in A(b)$ that maximizes:
+\begin{equation*}
+\mathds{1}\big\{F(b,a) \le \Delta'(b) \big\} \Big(\widebar{Q}(b, a) + c \Big(P_\theta(\tilde{b},a) \textstyle\frac{\sqrt{N(b)}}{1 + N(b,a)} \Big) \Big)
+\end{equation*}
+
+The benefit of CC-PUCT is that when our explored samples satisfy the constraint $\Delta'(b)$ (defined over the belief rather than both belief and action) we may explore new actions from this belief which are both safe and have the potential for higher reward.
+The key idea is that actions are chosen based on the balance between safety and utility, ensuring that we do not over-prioritize safety at the expense of potential rewards, while not exploiting rewards without regarding the risk.
+
+The five stages of $\Delta$-MCTS are shown in \cref{fig:delta-mcts} and \cref{alg:delta-mcts,alg:delta-mcts-simulate,alg:delta-zero-selection,alg:delta-zero-expansion,alg:delta-zero-adaptation}: \textit{selection}, \textit{expansion}, \textit{simulation}, \textit{backpropagation}, and \textit{adaptation}, with extensions to BetaZero in red.
+
+
+\begin{figure}[h!]
+    \centering
+    \input{algorithms/constrainedzero/delta-mcts}
+    \input{algorithms/constrainedzero/delta-mcts-simulate}
+\end{figure}
+
+\begin{figure}[!ht]
+    \centering
+    \input{algorithms/constrainedzero/delta-mcts-selection}
+    \input{algorithms/constrainedzero/delta-mcts-expansion}
+    \input{algorithms/constrainedzero/delta-mcts-adaptation}
+\end{figure}
+
+
+\subsection{Connection to ACI Quantiles}
+In adaptive conformal inference (ACI), the algorithm provides coverage based on quantiles of an estimated value from some data distribution \cite{gibbs2021adaptive}.
+In our work, we simplify the ACI formulation.
+To connect to the original ACI formulation, let $F(b,a)$ be the estimated failure probability ($F$-value) and $\widehat{Q}(\cdot)$ be the quantile function where the $\Delta$-quantile is defined on the range $[0,1]$.\footnote{The quantile function is typically defined over an input set $Y$. But in our case, it is defined over an input range $[0,1]$ to assess probabilities in a standardized way.}
+Let the set of failure probabilities associated to a belief-state node $b$ with children $A(b)$ be:
+\begin{equation}
+    \mathbf{f} = \big\{F(b,a') : a' \in A(b)\big\}
+\end{equation}
+In this formulation, we would want to update $\Delta(b)$ based on the error as indication of miscoverage of the most recent $F$-value $F(b,a)$:
+\begin{equation}
+    \text{err} = \begin{cases}
+        1 & \text{if } F(b,a) \not\in \widehat{C}_{\Delta} \\
+        0 & \text{otherwise}
+    \end{cases}
+\end{equation}
+where $\widehat{C}_{\Delta} := \big\{ p_i : p_i \le \widehat{Q}(\Delta(b)),\ p_i \in \mathbf{f} \big\}$ is the covered set. Here we use $\Delta(b)$ instead of $1 - \Delta(b)$ from \textcite{gibbs2021adaptive} because we want the lower quantile (i.e., we want to be below the failure probability threshold).
+This is equivalent to our simplification where the error is defined as the miscoverage of the $F$-value by the $\Delta(b)$ estimate:
+\begin{equation}
+    \text{err} = \mathds{1}\{F(b,a) > \Delta(b)\}
+\end{equation}
+and using the same update as $\Delta$-MCTS of:
+\begin{equation}
+    \Delta(b) = \Delta(b) + \eta(\text{err} - \Delta_0)
+\end{equation}
+Note that we reformulate the update function for our setting.
+In the original ACI formulation, the update is done according to $\Delta(b) = \Delta(b) + \eta(\Delta_0 - \text{err})$.
+In the original version, if the error is zero (indicating coverage), then $\Delta(b)$ is increased by $\eta\Delta_0$ (becoming tighter, noting this assumes the coverage is based on the upper quantile).
+If the error is one (indicating miscoverage), then $\Delta(b)$ is decreased by $\eta(1 - \Delta_0)$ (widening the coverage).
+In our version, we reverse the update to operate on the lower quantile, keeping the reactivity of the algorithm during miscoverage events, thus, increasing by $\eta(1-\Delta_0)$ in this case, as described in \cref{eq:err}.
+
+
+\section{Experiments}
+For a fair comparison, ConstrainedZero was evaluated against BetaZero using the same network and MCTS parameters.
+BetaZero uses a scalarized reward function to penalize failures, while ConstrainedZero omits the penalty and plans using the adaptive safety constraint instead.
+The BetaZero reward takes the form $\widebar{R}_b(b,a) = R_b(b,a) - \lambda C(b,a)$ with a cost $C(b,a)$ scaled by a tunable parameter $\lambda$, shown in \cref{fig:pareto}.
+
+Three safety-critical CC-POMDPs were evaluated.
+The first is the \textit{LightDark} POMDP, a benchmark localization task \cite{platt2010belief}, where a particle filter is used to update the belief with $n_\text{particles}=500$.
+A failure occurs if the agent stops outside of the goal (i.e., the origin).
+
+
+\begin{figure}[t!]
+    \centering
+    \includegraphics[width=0.525\textwidth]{figures/constrainedzero/results/cz-pareto.pdf}
+    \caption{Pareto front comparing against BetaZero($\lambda$).}
+    \label{fig:pareto}
+\end{figure}
+
+
+The next CC-POMDP is the \textit{aircraft collision avoidance} problem (CAS),  modeled after ACAS X \cite{kochenderfer2012next}.
+In the CAS problem, the ownship aircraft attempts to avoid a near mid-air collision (NMAC) with an intruding aircraft while minimizing the alert and reversal rates.
+An NMAC occurs if the ownship is within $50$ meters in relative altitude $h_\text{rel}$ of the intruder at the end of the encounter (i.e., when $|h_\text{rel}| \le 50$ and time to collision $t_\text{col}=0$).
+The belief is updated with an unscented Kalman filter \cite{wan2000unscented} (detailed in \cref{sec:belief_updating}) to track the mean and covariance of the state variables.
+
+Lastly, we study safe \textit{carbon capture and storage} (CCS), which is a promising mitigation of global emissions that captures CO$_2$ and stores it in porous subsurface material \cite{corso2022pomdp}.
+A challenge of CCS is safely injecting CO$_2$ into the subsurface while mitigating risk of leakage and earthquakes, where any CO$_2$ leakage indicates a failure.
+The simplified CCS problem uses spillpoint analysis to model the top surface of the injection site, and a sequential importance resampling particle filter is updated with observations at drilling locations \cite{corso2022pomdp}.
+
+
+\subsection{Empirical Results}
+\Cref{fig:pareto} compares ConstrainedZero against BetaZero, where BetaZero uses different values of the penalty $\lambda$.
+The penalties were swept between $-10$ and $-1000$ with $-100$ being the standard for the LightDark POMDP (proportional to the goal reward of $100$).
+A target safety level of ${\Delta_0 = 0.01}$ was chosen for ConstrainedZero.
+ConstrainedZero exceeds the BetaZero Pareto curve and achieves the target level of safety with a failure probability of ${0.01 \pm 0.01}$ computed over $100$ episodes.
+Notably, ConstrainedZero also has less variance in the failure probability and the returns.
+BetaZero still achieves good performance but at the cost of sweeping the penalty values without explicitly defining a safety threshold to satisfy.
+
+
+\begin{table*}[b!]
+    \centering
+    \small
+    \begin{threeparttable}
+        \begin{adjustbox}{max width=\textwidth}
+        \begin{tabular}{@{}lrrrrrrrr@{}}
+            \arrayrulecolor{black} % revert
+            \toprule
+              &  \multicolumn{2}{c}{\textbf{LightDark}}  &  &  \multicolumn{2}{c}{\textbf{Collision Avoidance}}  &  &  \multicolumn{2}{c}{\textbf{Spillpoint CCS}} \\
+              &  \multicolumn{2}{c}{\footnotesize$\Delta_0 = 0.01$}  &  &  \multicolumn{2}{c}{\footnotesize$\Delta_0 = 0.01$}  &  &  \multicolumn{2}{c}{\footnotesize{$\Delta_0 = 0.05$}} \\
+            \arrayrulecolor{lightgray}
+            \cmidrule{2-9}
+            \arrayrulecolor{black} % revert
+                             &  $p(\text{fail}) \downarrow$  &  returns $\uparrow$  &  &  $p(\text{fail}) \downarrow$  &  returns $\uparrow$  &  &  $p(\text{fail}) \downarrow$  &  returns $\uparrow$ \\
+            \midrule
+            ConstrainedZero  &  $\mathBF{0.01_{\bpm 0.01}}$  &  $\mathBF{13.07_{\bpm 0.42}}$  &  &  $\mathBF{0.00_{\bpm 0.00}}$  &  $\mathBF{-0.74_{\bpm 0.03}}$  &  &  $\mathBF{0.05_{\pm 0.02}}$  &  $\mathBF{2.62_{\pm 0.12}}$  \\
+            \arrayrulecolor{white}\midrule
+            No Adaptation$^*$  &  $0.66_{\pm 0.05}$  &  $27.47_{\pm 3.90}$  &  &  $0.03_{\pm 0.02}$  &  $-1.00_{\pm 0.00}$  &  &  $0.69_{\pm 0.04}$  &  $6.18_{\pm 0.36}$  \\
+            \arrayrulecolor{white}\midrule
+            $\Delta$-MCTS (no $f_\theta$)$^\dagger$  &  $0.01_{\pm 0.01}$  &  $1.86_{\pm 0.20}$  &  &  $0.32_{\pm 0.05}$  &  $0.00_{\pm 0.00}$  &  &  $1.00_{\pm 0.00}$  &  $6.87_{\pm 0.50}$  \\
+            \arrayrulecolor{grays1}\midrule
+            Raw Policy $P_\theta$  &  $0.01_{\pm 0.01}$  &  $12.88_{\pm 0.46}$  &  &  $0.00_{\pm 0.00}$  &  $-0.86_{\pm 0.02}$  &  &  $0.06_{\pm 0.02}$  &  $2.45_{\pm 0.11}$  \\
+            \arrayrulecolor{white}\midrule
+            Raw Value$^\ddagger$ $V_\theta$  &  $0.72_{\pm 0.05}$  &  $28.00_{\pm 4.51}$  &  &  $0.16_{\pm 0.04}$  &  $-0.20_{\pm 0.04}$  &  &  $0.38_{\pm 0.05}$  &  $4.27_{\pm 0.30}$  \\
+            \midrule
+            Raw Failure$^\ddagger$ $F_\theta$  &  $0.80_{\pm 0.04}$  &  $0.05_{\pm 0.04}$  &  &  $0.00_{\pm 0.00}$  &  $-1.62_{\pm 0.08}$  &  &  $0.00_{\pm 0.00}$  &  $0.00_{\pm 0.00}$  \\
+            \arrayrulecolor{black}
+            \bottomrule
+        \end{tabular}
+        \end{adjustbox}
+        \begin{scriptsize}
+            \begin{tablenotes}
+                \linespread{1.05}\selectfont % fixes vertical spacing with first item
+                \item[\!\!] {All results report the mean $\pm$ standard error over $100$ seeds, evaluated using the $\argmax$ of \protect\cref{eq:policy_q_weight}, i.e., $\tau \to 0$.}
+                \item[*] {Trained with the same parameters as ConstrainedZero without adaptation, i.e., only a hard constraint on $\Delta_0$.}
+                \item[$\dagger$] {$\Delta$-MCTS without the neural network for the value or failure probability and a random policy for CC-PUCT.}
+                \item[$\ddagger$] {One-step look-ahead over all actions using only the value or failure probability network head with $5$ obs. per action.}
+            \end{tablenotes}
+        \end{scriptsize}
+    \end{threeparttable}
+    \caption{ConstrainedZero results. Bold indicates best results within $\Delta_0$ threshold.}
+    \label{tab:cz_results}    
+\end{table*}
+
+
+\begin{figure}[t]
+    \centering
+    
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/constrainedzero/results/cas_returns.pdf}
+        \caption{Returns from policy iteration.}
+        \label{fig:cas_results_returns}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/constrainedzero/results/cas_accuracy.pdf}
+        \caption{Safety from policy iteration.}
+        \label{fig:cas_results_safety}
+    \end{subfigure}
+
+    \caption{Utility and safety results for the collision avoidance CC-POMDP.}
+    \label{fig:cas_results_performance}
+\end{figure}
+
+
+Shown in table~\ref{tab:cz_results}, an ablation study is conducted for ConstrainedZero.
+Most notably, the adaptation procedure is crucial to enable the algorithm to properly balance safety and utility during planning (also shown in \cref{fig:cas_results_returns,fig:cas_results_safety}).
+When comparing $\Delta$-MCTS without network approximators against ConstrainedZero, it is clear that offline policy iteration allows for better online planning.
+Using only the raw policy head $P_\theta$ achieves good performance, which is trained to imitate the tree policy.
+However, incorporating additional online planning with the full network yields better results overall, enabling planning over potentially unseen information.
+The full ConstrainedZero algorithm consistently achieves the highest return within the satisfied target level of safety $\Delta_0$.
+
+\subsection{ConstrainedZero Learning and Safety Curves}
+
+Compared to BetaZero, \cref{fig:cas_results_performance} highlights that ConstrainedZero satisfies the safety constraint earlier during policy iteration, while simultaneously maximizing returns (shown for the CAS problem).
+As an ablation, we show that the policy trained without adaptation learns to maximize returns but fails to satisfy the safety constraint.
+This is because without adaptation, the algorithm will attempt to satisfy an overly conservative fixed constraint, not taking into account the outcomes of its actions.
+With adaptation, ConstrainedZero adjusts the constraint in response to feedback from the environment, resulting in the algorithm becoming more capable of optimizing its performance within the bounds of the adaptive constraint.
+This demonstrates the importance of adaptation, as a fixed constraint may be too conservative or too risky, leading to suboptimal decision making.
+
+
+\begin{figure}[p!]
+    \captionsetup{font={small}}
+    \centering
+    \begin{subfigure}[t]{\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/constrainedzero/results/cas-climb.pdf}
+        \caption{Learned neural network heads for a belief slice when $\dot{h}_\text{rel}=3$ (climbing).}
+        \label{fig:cas_climb}
+    \end{subfigure}
+
+    \vspace*{1cm} % spaces necessary above and below
+
+    \begin{subfigure}[t]{\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/constrainedzero/results/cas-level.pdf}
+        \caption{Learned neural network heads for a belief slice when $\dot{h}_\text{rel}=0$ (level).}
+        \label{fig:cas_level}
+    \end{subfigure}
+
+    \vspace*{1cm} % spaces necessary above and below
+
+    \begin{subfigure}[t]{\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/constrainedzero/results/cas-descend.pdf}
+        \caption{Learned neural network heads for a belief slice when $\dot{h}_\text{rel}=-3$ (descending).}
+        \label{fig:cas_descend}
+    \end{subfigure}
+    \caption{Slices of the collision avoidance neural network heads.}
+    \label{fig:cas_nn}
+\end{figure}
+
+
+\subsection{Analyzing the Learned Surrogates: Aircraft Collision Avoidance}
+
+\Cref{fig:cas_nn} illustrates a sweep across the belief space for the CAS problem, plotting the three neural network heads: value estimate, action selection policy, and failure probability estimate.
+Having a surrogate for where the system is likely to fail allows for further safety analysis to be conducted.
+Plotting several CAS trajectories in \cref{fig:cas_results_trajs} indicates that our learned policy exhibits the ``notch'' behavior demonstrated by \textcite{kochenderfer2012next}.
+The behavior is evident in the beginning of the trajectories, where the policy tends to withhold alerting until the time to collision becomes smaller, indicating that when the aircraft are near co-altitude (i.e., relative altitude of zero), the policy is waiting for the state uncertainty captured in the belief to decrease, so as to not overly \textit{reverse} the aircraft.
+
+
+\begin{figure}[t]
+    \centering
+    \includesvg[width=0.7\textwidth,pretex=\small]{figures/constrainedzero/results/cas_trajs.svg}
+    \hspace*{1.5cm}
+    \caption{Trajectories of the collision avoidance CC-POMDP.}
+    \label{fig:cas_results_trajs}
+\end{figure}
+
+
+\subsection{Application to CC-MDPs: Wildfire Resource Allocation}
+
+Because we reframe the CC-POMDP problem as a CC-BMDP, this means that ConstrainedZero (and subsequently, $\Delta$-MCTS), can be applied directly to \textit{chance-constrained MDPs} (CC-MDPs).
+To test this, we adapt the airborne wildfire resource allocation MDP from \textcite{griffith2017automated} into a CC-MDP.
+The reward function applies a cost for every time step that an evolving wildfire is active and a cost for spreading to a nearby populated area (bottom left corner of the maps in \cref{fig:wildfire_ccmdp}).
+A failure occurs if any fire is spread to the populated area.
+We set the desired failure probability to be $\Delta_0 = 0.1$.
+\Cref{fig:wildfire_ccmdp} shows a learned ConstrainedZero policy applied to the wildfire CC-MDP.
+We observed that the policy learns to \textit{indirectly} suppress the wildfire by placing suppression resources (in blue) between the wildfire and the populated area.
+This ``indirect attack'' is common in wildfire incident management as a strategy to get ahead of the predicted wildfire spread for better containment \cite{pyne1996introduction}, instead of directly attempting to suppress the active wildfire.
+
+\begin{figure}[t!]
+    \centering
+
+    \begin{subfigure}[t]{0.19\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \node[inner sep=0pt, draw=black, line width=1pt] (img) at (0,0) {\includegraphics[width=\textwidth]{figures/constrainedzero/wildfire/wildfire-map-1.png}};
+            \node[inner sep=0pt] (pop) at (-0.92,-1) {\includegraphics[width=0.3\textwidth]{figures/constrainedzero/wildfire/populated-area.png}};
+            \node[fill=none, draw=none, text=white, font=\scriptsize, anchor=west] (action) at (-1.4, -0.25) {aerial resource};
+            \node[fill=none, draw=none, text=white, font=\scriptsize, anchor=west] (population) at (-0.7, -1.15) {populated area};
+
+            \draw[->, >=Stealth, scale=0.5, white] ($(population.west)+(0.2,0)$) -- ($(population.west)-(0.5,0)$);
+
+            \draw[->, >=Stealth, scale=0.5, white] ($(action.south)+(0,0.2)$) -- ($(action.south)-(0,0.7)$);
+        \end{tikzpicture}
+        \caption{Time 1}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.19\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \node[inner sep=0pt, draw=black, line width=1pt] (img) at (0,0) {\includegraphics[width=\textwidth]{figures/constrainedzero/wildfire/wildfire-map-10.png}};
+        \end{tikzpicture}
+        \caption{Time 10}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.19\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \node[inner sep=0pt, draw=black, line width=1pt] (img) at (0,0) {\includegraphics[width=\textwidth]{figures/constrainedzero/wildfire/wildfire-map-25.png}};
+        \end{tikzpicture}
+        \caption{Time 25}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.19\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \node[inner sep=0pt, draw=black, line width=1pt] (img) at (0,0) {\includegraphics[width=\textwidth]{figures/constrainedzero/wildfire/wildfire-map-40.png}};
+        \end{tikzpicture}
+        \caption{Time 40}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.19\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \node[inner sep=0pt, draw=black, line width=1pt] (img) at (0,0) {\includegraphics[width=\textwidth]{figures/constrainedzero/wildfire/wildfire-map-65.png}};
+
+            \draw[-, dashed, very thick, cyan, bend right=25] (-1,1.4) to (0.2,-1.4);
+            \node[fill=none, draw=none, text=cyan, font=\scriptsize, anchor=west] at (-0.95, 1.2) {``indirect attack''};
+        \end{tikzpicture}
+        \caption{Time 65}
+    \end{subfigure}
+
+    \caption{ConstrainedZero policy applied to the wildfire resource allocation CC-MDP.}
+    \label{fig:wildfire_ccmdp}
+\end{figure}
+
+
+\begin{figure}[b!]
+    \centering
+
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/constrainedzero/results/eta_sweep_ld_ret.pdf}
+        \caption{Returns when sweeping $\eta$.}
+        \label{fig:eta_returns}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/constrainedzero/results/eta_sweep_ld_acc.pdf}
+        \caption{Safety when sweeping $\eta$.}
+        \label{fig:eta_safety}
+    \end{subfigure}
+
+    \caption{Empirical sensitivity analysis of the ACI step size $\eta$ on offline policy iteration.}
+    \label{fig:eta_sweep}
+\end{figure}
+
+
+\subsection{Analysis of ACI Step Size \texorpdfstring{$\eta$}{η} on Training}
+
+To test the sensitivity of ConstrainedZero to the ACI step size $\eta$, we swept values of $\eta$ for the LightDark CC-POMDP (\cref{fig:eta_sweep}).
+The step size controls the reactivity of the updates in the adaptation step of $\Delta$-MCTS, where the larger the $\eta$, the more reactive the ACI update will be.
+\Cref{fig:eta_returns} shows that with a larger step size, the reactivity of the threshold update in \cref{eq:aci_update} opens the safety threshold faster, resulting in more risky behavior at the expense of higher returns.
+Empirically, we show that ConstrainedZero converges to an approximately Pareto-optimal policy, balancing the desired level of safety with the maximization of utility.
+Due to its stability, a step size of $\eta = \num{1e-5}$ was chosen for the final results in \cref{tab:cz_results}.
+Future research may focus on methods for adapting the step size online during planning, such as the parameter-free method AgACI from \textcite{zaffran2022adaptive}.
+
+
+\begin{figure}[t]
+    \centering
+        \resizebox{0.5\textwidth}{!}{%
+            \includegraphics{diagrams/constrainedzero/cz-network.pdf}
+        }
+    \caption{Simple network architecture used for each CC-POMDP.}
+    \label{fig:nn_arch}
+\end{figure}
+
+
+\subsection{Neural Network Architectures}
+The neural network used for each CC-POMDP is a simple fully-connected feedforward network shown in \cref{fig:nn_arch} and based on the network used by BetaZero in \cref{ch:betazero}.
+For the LightDark problem, an input size of $m=2$ is used for the mean and standard deviation of the particle filter belief over the $y$-location state values, with an internal network depth of $d=2$ and width of $k=64$.
+For the CAS problem, an input size of $m=20$ is used for the mean and covariance of the unscented Kalman filter belief over the state variables of $h_\text{rel}$, $\dot{h}_\text{rel}$, $a_\text{prev}$, and $t_\text{col}$, with a network depth of $d=2$ and width of $k=64$.
+Finally, the spillpoint CCS problem uses an input size of $m=510$ (mean and standard deviation for the top-surface grid points, top-surface heights, porosity, injection locations, and injection depth), with a network depth of $d=4$ and width of $k=128$.
+
+Following \cref{ch:betazero}, the value head of the network is trained on the normalized returns so that they roughly lie in the range of $[-1, 1]$.
+An output denormalization layer is appended to the value head so that the predictions are properly scaled (done entirely internal to the network).
+Value normalization is useful for training stability so that the training targets have zero mean and unit variance \cite{lecun2002efficient}.
+
+
+\paragraph{Hyperparameters and open-sourced code.}
+The parameters used for ConstrainedZero and $\Delta$-MCTS, along with the code for all the experiments and CC-POMDP environments in this work, are included in an open-source package extending the BetaZero.jl Julia package.\footnote{\url{https://github.com/sisl/ConstrainedZero.jl}}
+
+
+\section{Conclusions}
+This chapter introduces \textit{ConstrainedZero}, an extension of the BetaZero POMDP planning algorithm to chance-constrained POMDPs.
+Along with neural network estimates of the value function and action-selection policy, we include a network head that estimates the failure probability given a belief.
+By formulating the safe planning problem as a CC-POMDP, we select a target level of safety to optimize towards, in contrast to traditional POMDP methods that tune the reward function to balance safety and utility as a multi-objective problem.
+We develop an extension to Monte Carlo tree search that includes an \textit{adaptation} stage that adjusts the target level of safety during planning with adaptive conformal inference.
+The resulting $\Delta$-MCTS algorithm modifies MCTS for CC-POMDPs and addresses the issue of overfitting to failure predictions.
+Additionally, a constrained action-selection criterion (CC-PUCT) was developed to enable planning under constraints.
+
+\subsection{Limitations}
+Adapting the safety level when planning with approximations may lead to deviations despite ACI convergence guarantees, but the lack of adaptation also does not guarantee the desired safety.
+However, our experiments show that this flexibility helps the algorithm find policies matching the targeted safety.
+Similar to BetaZero, ConstrainedZero may require more computing resources than existing POMDP solvers due to neural network training and parallel $\Delta$-MCTS episodes.
+However, it is designed for large-scale problems with high-dimensional spaces that require long-horizon planning.
+We focus on real-world scenarios where transition dynamics, not policy training, are the main challenge, using past experiences to learn an approximately optimal policy offline that is refined online using tree search.

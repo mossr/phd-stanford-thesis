@@ -1,0 +1,15 @@
+\begin{algorithm}[H]
+    \caption{Monte Carlo tree search algorithm using $Q$-weighed visit counts.} 
+    \label{alg:mcts-top-lvl}
+    \begin{algorithmic}[1]
+        \Function{MCTS$(\mathcal{P}, f_\theta, b, \psi)$}{}
+        \State $\mathcal{M} \leftarrow \langle \mathcal{B}, \mathcal{A}, T_b, R_b, \gamma \rangle$ converted from $\mathcal{P}$ (POMDP) \Comment{plan using belief-state MDP}
+        \For{$i \leftarrow 1 \textbf{ to } n_\text{online}$}
+            \State \textproc{Simulate}$(f_\theta,b,d)$ \Comment{MCTS simulated planning to a depth $d$ (\cref{alg:betazero-mcts})}
+        \EndFor
+        \State $\pi_\text{tree}(b, a) \propto \Big(\Big(\frac{\exp Q(b, a)}{\sum_{a'} \exp Q(b, a')}\Big)^{z_q}\Big(\frac{N(b,a)}{\sum_{a'} N(b,a')}\Big)^{z_n}\Big)^{1/\tau}$ \Comment{$Q$-weighted  counts, eq.~\ref{eq:policy_q_weight}}
+        \State $\pi_\text{tree}(b, a_i) \leftarrow \pi_\text{tree}(b, a_i) / \sum_{j} \pi_\text{tree}(b, a_j)\phantom{\Big)}$ \Comment{(normalize) valid probability distr.}
+        \State \Return $a \sim \pi_\text{tree}(b, \cdot)\phantom{\big)}$ \Comment{sample root node action (let $\tau \to 0$ to get $\argmax$)}
+    \EndFunction
+    \end{algorithmic}
+\end{algorithm}

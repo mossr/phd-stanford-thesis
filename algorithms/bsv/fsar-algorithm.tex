@@ -1,0 +1,48 @@
+{\centering
+\begin{minipage}{\linewidth}\hypertarget{link:fsar}{}
+    \linespread{1.0}\selectfont
+    \begin{algorithm}[H]
+        \caption{Failure search and refinement acquisition functions.} 
+        \label{alg:fsar}
+        \begin{algorithmic}[1]
+        \Function{FailureSearchAndRefinement$(\mathcal{GP}, p, t)$}{}
+        \State $\hat{f} \leftarrow \textproc{MeanFunction}(\mathcal{GP})$
+        \State $\hat{\sigma} \leftarrow \textproc{StandardDeviationFunction}(\mathcal{GP})$
+    
+        \State $\vec{x}'_1 \leftarrow \begin{cases}
+            \vec{x}' \leftarrow \argmax_{\vec{x} \in \mathcal{X}} \hat{\sigma}(\vec{x})p(\vec{x})^{1/\alpha t} & \text{if } \tau = 0\\
+            \vec{x}' \sim \big( \hat{\sigma}(\vec{x})p(\vec{x})^{1/\alpha t} \big)^{1/\tau} & \text{otherwise}
+        \end{cases}$ 
+        \smash{%
+        $\left.\rule{0pt}{1.35\baselineskip}\right\}~%
+        \raisebox{-0.5\baselineskip}[0pt][0pt]{\shortstack[l]{uncertainty\\exploration}}$%
+        }
+
+        \State $\mu'(\vec{x}) \leftarrow \hat{f}(\vec{x})(1 - \hat{f}(\vec{x}))$
+        \State $\vec{x}'_2 \leftarrow \begin{cases}
+            \vec{x}' \leftarrow \argmax_{\vec{x} \in \mathcal{X}} \bigl(\mu'(\vec{x}) + \lambda\hat{\sigma}(\vec{x})\bigr)p(\vec{x})^{1/\alpha t} & \text{if } \tau = 0\\
+            \vec{x}' \sim \big( \bigl(\mu'(\vec{x}) + \lambda\hat{\sigma}(\vec{x})\bigr)p(\vec{x})^{1/\alpha t} \big)^{1/\tau} & \text{otherwise}
+        \end{cases}$
+        \raisebox{.5\baselineskip}[0pt][0pt]{\smash{%
+        $\left.\rule{0pt}{2.025\baselineskip}\right\}~%
+        \raisebox{-0.5\baselineskip}[0pt][0pt]{\shortstack[l]{boundary\\refinement}}$%
+        }}
+    
+        \State $\hat{h}(\vec{x}) \leftarrow \hat{f}(\vec{x}) + \lambda\hat{\sigma}(x)$
+        \State $\hat{g}(\vec{x}) \leftarrow \mathds{1}\bigl\{\hat{h}(\vec{x}) \ge 0.5\bigr\}$
+        \State $\vec{x}'_3 \leftarrow \begin{cases}
+            \vec{x}' \sim \hat{h}(\vec{x}) & \text{if } \hat{g}(\vec{x}) = 0,\, \forall \vec{x} \in \mathcal{X} \\
+            \vec{x}' \sim \hat{g}(\vec{x})\hat{h}(\vec{x})p(\vec{x}) & \text{otherwise}
+        \end{cases}$
+        \raisebox{1.2\baselineskip}[0pt][0pt]{\smash{%
+        $\left.\rule{0pt}{2.5\baselineskip}\right\}~%
+        \raisebox{-0.5\baselineskip}[0pt][0pt]{\shortstack[l]{failure region\\sampling}}$%
+        }}
+
+        \State $\vec{w}' \leftarrow \textproc{ComputeWeights}(\vec{x}'_1, \vec{x}'_2, \vec{x}'_3)$
+        \State \Return $\{\vec{x}'_1, \vec{x}'_2, \vec{x}'_3\}, \vec{w}'$
+        \EndFunction
+        \end{algorithmic}
+    \end{algorithm}
+\end{minipage}
+\par}

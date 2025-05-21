@@ -1,0 +1,33 @@
+\begin{algorithm}[H]
+    \caption{$\mathcal{I}$-VAE training procedure.}
+    \label{alg:ivae_training}
+    \begin{algorithmic}[1]
+    \Require $\theta, \phi, \psi, \omega \leftarrow \text{initialize network parameters}$
+    \Require $\alpha \leftarrow \text{trajectory contrastive loss weighting}$
+    \Require $\tau \leftarrow \text{trajectory contrastive loss temperature}$
+    \Require $T \leftarrow \text{observation horizon}$
+    \For{$\text{epoch} \leftarrow 1 \textbf{ to } n_\text{pretrain}$}
+        \State Sample $(s, \mathbf{o})$ from $\mathcal{D}_\text{partial}$
+        \State Forward pass $(s, \mathbf{o})$ to get $(\hat{s}, \mu_s, \log \sigma^2_s,\mu_\mathbf{o},\log \sigma^2_\mathbf{o})$ calling \cref{alg:ivae_forward}
+        \State Compute loss $\mathcal{L}_{\mathcal{I}\text{-VAE}}(s, \mathbf{o}; \theta, \phi, \psi)$ given $(\hat{s},\, \log \sigma^2_s,\, \mu_\mathbf{o},\, \log \sigma^2_\mathbf{o})$ with \cref{eq:ivae_loss}
+        \State Train $\theta$, $\phi$, and $\psi$
+    \EndFor
+    \For{$\text{epoch} \leftarrow 1 \textbf{ to } n_\text{fine-tune}$}
+        \State Sample $(s, \mathbf{o}_{1:T})$ from $\mathcal{D}_\text{traj}$
+        \State Compute $\mu_s$ and $\log \sigma^2_s$ from state encoder $\mathcal{E}_s(s)$
+        \For{$t \leftarrow 1 \textbf{ to } T$}
+            \State Encode $h_{\mathbf{o}_t}$ from observation encoder $\mathcal{E}_\mathbf{o}(\mathbf{o}_t)$ using $\mathbf{o}_t \in \mathbf{o}_{1:T}$
+            \State Compute $\mu_{\mathbf{o}_t}$ and $\log \sigma^2_{\mathbf{o}_t}$ from $p_\psi(z \mid \mathbf{o}_t)$ using observation encoding $h_{\mathbf{o}_t}$
+            \State Project $\tilde{z} = \Pi_\omega(\mu_{\mathbf{o}_t})$
+            \State Decode $\hat{s}_t$ from $p_\theta(s \mid \tilde{z}, \mathbf{o})$
+            \State Compute $\mathcal{L}_t = \mathcal{L}_{\mathcal{I}\text{-VAE}}(s, \mathbf{o}_t; \theta, \phi, \psi)$ from \cref{eq:ivae_loss} using $\hat{s}_t$
+        \EndFor
+        \State Compute combined loss $\mathcal{L} = \alpha \mathcal{L}_\text{TCL}(\mathbf{o}_{1:T}; \omega, K) + \mathbb{E}_t[\mathcal{L}_t]$ using \cref{eq:tcl}
+        \If{$\text{epoch} = 1$}
+            \State Train projection network parameters $\omega$
+        \Else
+            \State Train $\omega$ and $\psi$ (optional: $\theta$ and $\phi$)
+        \EndIf
+    \EndFor
+    \end{algorithmic}
+\end{algorithm}

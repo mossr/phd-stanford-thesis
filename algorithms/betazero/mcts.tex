@@ -1,0 +1,22 @@
+\begin{algorithm}[H]
+    \caption{BetaZero MCTS simulation.}
+    \label{alg:betazero-mcts}
+    \begin{algorithmic}[1]
+        \Function{Simulate$(f_\theta, b, d)$}{}
+            \State \textbf{if}\ $d=0$\ \textbf{return}\ $0$
+            \If {$b \not\in \mathcal{T}$}
+                \State $\mathcal{T} \leftarrow \mathcal{T} \cup \{b\}$
+                \State $N(b) \leftarrow N_0(b)$
+                \State $\tilde{b} \leftarrow \phi(b)$ \Comment{belief representation}
+                \State \Return $V_\theta(\tilde{b})$  \label{line:mcts_lookup} \Comment{value lookup}
+            \EndIf
+            \State $N(b) \leftarrow N(b) + 1$
+            \State $a \leftarrow \textproc{ActionSelection}(f_\theta, b)$ \label{line:mcts_selection} \Comment{selection}
+            \State $(b^\prime, r) \leftarrow \textproc{BeliefStateExpansion}(b,a)$\label{line:mcts_expansion} \Comment{expansion}
+            \State $q \leftarrow r + \gamma \textproc{Simulate}(f_\theta, b^\prime, d-1)$ \label{line:mcts_simulation} \Comment{simulation}
+            \State $N(b,a) \leftarrow N(b,a)+1$
+            \State $Q(b,a) \leftarrow Q(b,a)+\frac{q-Q(b,a)}{N(b,a)}$  \label{line:mcts_backprop} \Comment{backpropagation}
+            \State \Return $q$
+        \EndFunction
+    \end{algorithmic}
+\end{algorithm}

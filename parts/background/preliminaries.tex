@@ -1,0 +1,393 @@
+\chapter{Preliminaries}\label{ch:preliminaries}
+\vspace*{-6mm}
+\chapterquote{The present d-separates the future from the past.}{Stefano Ermon}
+
+In this chapter, we provide background on concepts used in this thesis: sequential decision making frameworks, planning algorithms, surrogate modeling, and safety~validation.
+
+\section{Markov Decision Processes}
+The \textit{Markov decision process} (MDP) \cite{bellman1957dynamic,dmbook}, shown in \cref{fig:mdp_ddn}, is a sequential decision making framework used to model problems where the state-transition dynamics are uncertain.
+An MDP is defined by the tuple $\langle \mathcal{S}, \mathcal{A}, T, R, \gamma \rangle$, where $\mathcal{S}$ is the space of all states $s \in \mathcal{S}$ (discrete or continuous), the action space is denoted $\mathcal{A}$ where $a \in \mathcal{A}$ (discrete or continuous), the state-transition function is denoted $s' \sim T(\cdot \mid s, a)$ for a next state $s'$, the reward function is denoted $r = R(s,a)$ or $r = R(s,a,s')$, and the discount factor $\gamma \in [0, 1)$ controls the problem's degree of myopia, where the discount factor could be $\gamma = 1$ for undiscounted problems (noting that the focus of this thesis is on \textit{discounted MDPs}).
+
+To solve an MDP, planning algorithms (\cref{sec:planning_algs}) construct a policy $\pi$ that maps states to actions: $a = \pi(s)$ or $a \sim \pi(\cdot \mid s)$.
+The objective of planning algorithms is to find a policy that maximizes the expected discounted sum of rewards (referred to as the \textit{value}):
+\begin{equation}
+    \operatornamewithlimits{maximize}_\pi \,\, V^\pi(s_0) = \mathbb{E}_\pi \Bigg[ \sum_{t=0}^\infty \gamma^t R(s_t, a_t) \mid s_0 \sim \mathcal{S}_0,\, a_t \sim \pi(\cdot \mid s_t) \Bigg]
+\end{equation}
+where the initial state $s_0$ is sampled from the initial state distribution $\mathcal{S}_0$ (also denoted $\mu_0$).
+
+\input{diagrams/background/mdp-pomdp-ddn}
+
+\section{Partially Observable Markov Decision Processes}\label{sec:pomdps}
+
+The \textit{partially observable Markov decision process} (POMDP) \cite{cassandra1998exact,kaelbling1998planning,dmbook} is a model for sequential decision making problems where the true state is unobservable, modeling the real world.
+Defined by the tuple $\langle \mathcal{S}, \mathcal{A}, \mathcal{O}, T, R, O, \gamma \rangle$, 
+the POMDP is an extension to the MDP framework used in reinforcement learning and planning with the addition of an observation space $\mathcal{O}$ (where $o \in \mathcal{O}$) and observation model $O(o \mid a, s')$.
+Given a current state $s \in \mathcal{S}$ and taking an action $a \in \mathcal{A}$, the agent transitions to a new state $s'$ using the transition model $s' \sim T(\cdot \mid s, a)$.
+Without access to the true state, an observation is received $o \sim O(\cdot \mid a, s')$ and used to update the belief $b$ over the possible next states $s'$ to get the posterior:
+\begin{equation}    
+    b'(s') \propto O(o \mid a, s')\int T(s' \mid s, a)b(s) \diff s
+\end{equation}
+where the belief is a distribution over states---capturing state uncertainty.
+Examples of the different types of belief representations and updating methods are detailed in \cref{sec:belief_updating}.
+
+A stochastic POMDP policy $\pi(a \mid b)$ is defined as the distribution over actions given the current belief $b$.
+After taking an action $a \sim \pi(\cdot \mid b)$, the agent receives a reward $r$ from the environment according to the reward function $R: \mathcal{S} \times \mathcal{A} \to \mathbb{R}$ or $R: \mathcal{S} \times \mathcal{A} \times \mathcal{S} \to \mathbb{R}$ using the next state.
+Note that the policy may be deterministic, i.e., $a = \pi(b)$.
+
+\subsection{Belief-State MDPs}\label{sec:belief_state_mdps}
+In \textit{belief-state MDPs}, a POMDP is converted to an MDP by treating the belief as a state \cite{kaelbling1998planning,dmbook}.
+The reward function then becomes a weighting of the state-based reward function:
+\begin{align}\label{eq:belief_reward}
+    R_b(b,a) = \!\int b(s)R(s,a) \,\mathrm{d}s
+\end{align}
+The belief-state MDP (BMDP) shares the same action space as the underlying POMDP and operates over a belief space $\mathcal{B}$ that is the simplex over the state space $\mathcal{S}$. The belief-state MDP defines a new belief-state transition function $b' \sim T_b(\cdot \mid b, a)$ as:
+\begin{align}
+    s \sim b(\cdot) \qquad s' \sim T(\cdot \mid s, a) \qquad o \sim O(\cdot \mid a, s') \qquad b' \leftarrow \textsc{Update}(b, a, o) \label{eq:tb_update}
+\end{align}
+where the belief update can be done using methods from \cref{sec:belief_updating}.
+Therefore, the belief-state MDP is defined by the tuple $\langle \mathcal{B}, \mathcal{A}, T_b, R_b, \gamma \rangle$ with the finite-horizon discount factor $\gamma \in [0,1)$ that controls the effect that future rewards have on the current action.
+
+The objective to solve BMDPs is to find a policy $\pi$ that maximizes the \textit{value function}:
+\begin{equation}
+    \operatornamewithlimits{maximize}_\pi \,\, V^\pi(b_0) = \mathbb{E}_\pi \left[\sum_{t=0}^T \gamma^t R_b(b_t,a_t) \bigmid\mid b_t \sim T_b(\cdot \mid s_t, a_t),\, a_t \sim \pi(\cdot \mid b_t) \right]
+\end{equation}
+given an initial belief $b_0$, the transitioned belief $b_t$, and an action $a_t$ from the policy $\pi$.
+Different belief updating methods are used depending on the problem structure (i.e., discrete or continuous state and observation spaces and potentially nonlinear transition dynamics).
+
+\subsection{Belief Updating}\label{sec:belief_updating}
+Beliefs can be represented in different ways, namely parametric or non-parametric representations \cite{dmbook}.
+For parametric beliefs, the belief distribution is represented by a set of parameters for a fixed distribution family (e.g., categorical distribution where probability mass is assigned to each discrete state or multivariate Gaussian distributions for continuous problems).
+For non-parametric beliefs, the belief distribution is represented by a collection of states (often called \textit{state particles}), which are points sampled from the posterior state space.
+Depending on the belief representation, different belief updating algorithms can be used.
+
+\paragraph{Discrete state filtering.}
+If the state and observation spaces are discrete, then we can perform exact belief updates \cite{dmbook}.
+This means we can arrive at an analytical solution to the belief updating without approximations.
+For discrete states and observations with relatively small space sizes $|\mathcal{S}|$ and $|\mathcal{O}|$, we can use the \textit{discrete state filter} (also called \textit{recursive Bayesian estimation}) to infer the unknown belief distribution.
+The discrete state filter updates the belief recursively over time, using the Markov assumption which says that the current state $s_t$ is conditionally independent of all past states and actions given the previous state $s_{t-1}$ and action $a_{t-1}$.
+Due to the independence assumption, if an agent with belief $b$ takes an action $a$ and receives an observation $o$, then the new belief $b^\prime$ becomes:
+\begin{align*}
+    b^\prime(s^\prime) &= P(s^\prime \mid b, a, o)\\
+                       &\propto P(o \mid b, a, s^\prime) P(s^\prime \mid b, a) \tag{Bayes' rule}\\
+                       &\propto O(o \mid a, s^\prime) P(s^\prime \mid b, a)\tag{observation definition}\\
+                       &\propto O(o \mid a, s^\prime) \sum_s P(s^\prime \mid b, a, s) P(s \mid b, a) \tag{law of total probability}\\
+                       &\propto O(o \mid a, s^\prime)\sum_s T(s^\prime \mid s, a)b(s) \tag{state transition model}
+\end{align*}
+We can call this the \textit{unnormalized} belief $\hat{b}'$. The exact belief update is then normalized so that beliefs sum to one:
+\begin{equation}
+    b^\prime(s^\prime) = \frac{\hat{b}'(s')}{\sum_{s^{\prime\prime}} \hat{b}'(s^{\prime\prime})} = \frac{O(o \mid a, s^\prime)\sum_s T(s^\prime \mid s, a)b(s)}{\sum_{s^{\prime\prime}} O(o \mid a, s^{\prime\prime}) \sum_s T(s^{\prime\prime} \mid s, a) b(s)}
+\end{equation}
+This ensures that $b'(s') \ge 0$ for all $s' \in \mathcal{S}$ and that $\sum_{s'} b'(s') = 1$, making $b'$ a valid probability distribution (i.e, a valid probability mass function in the discrete case).
+
+\paragraph{Kalman filtering.}
+So far, we have shown how to update beliefs for discrete POMDPs (discrete states and observations).
+In continuous state and observation problems, updating the belief involves integrating instead of summing:
+\begin{equation}
+    b'(s') \propto O(o \mid a, s')\int T(s' \mid s, a)b(s) \diff s
+\end{equation}
+Integrating over the state space may be intractable; therefore, methods have been developed to address this challenge.
+If certain linear-Gaussian assumptions are met, then we can update the belief using a \textit{Kalman filter} \cite{kalman1960new,welch1995introduction,dmbook}.
+In a standard Kalman filter, we can compute the exact belief update under the following assumptions.
+We assume the transition model $T$ and observation model $O$ to be linear-Gaussian and assume the belief $b$ to be Gaussian, then:
+\begin{align*}
+    T(\mathbf{s}^\prime \mid \mathbf s, \mathbf a) &= \mathcal{N}(\mathbf{s}^\prime \mid \mathbf{T}_s \mathbf{s} + \mathbf{T}_a \mathbf{a},\, \mat{\Sigma}_s) \tag{linear-Gaussian transition} \\
+    O(\mathbf o \mid \mathbf{s}^\prime) &= \mathcal{N}(\mathbf o \mid \mathbf{O}_s \mathbf{s}^\prime,\, \mat{\Sigma}_o) \tag{linear-Gaussian observation} \\
+    b(\mathbf{s}) &= \mathcal{N}(\mathbf{s} \mid \vec{\mu}_b,\, \mat{\Sigma}_b) \tag{Gaussian belief}
+\end{align*}
+where $\vec{\mu}_b$ and $\vec{\Sigma}_b$ are the mean vector and covariance matrix that define the Gaussian belief, the state transition covariance is $\vec{\Sigma}_s$, and the observation covariance is $\vec{\Sigma}_o$.
+As shown in \cref{alg:kalman_filter}, the first step is prediction.
+The prediction step uses the transition dynamics to get a predicted distribution that is parameterized by the following mean and covariance:
+\begin{align}
+    \vec{\mu}_p &= \mathbf{T}_s\vec{\mu}_b + \mathbf{T}_a\vec{a} \tag{predicted mean} \\
+    \vec{\Sigma}_p &= \mathbf{T}_s\vec{\Sigma}_b\mathbf{T}_s^\top + \vec{\Sigma}_s \tag{predicted covariance}
+\end{align}
+The update step then uses the prediction to update the belief:
+\begin{align}
+    \mathbf{K} &= \frac{\vec{\Sigma}_p\mathbf{O}_s^\top}{\mathbf{O}_s\vec{\Sigma}_p\mathbf{O}_s^\top + \vec{\Sigma}_o} \tag{Kalman gain} \\
+    \vec{\mu}_b &= \vec{\mu}_p + \mathbf{K}\big(\mathbf{o} - \mathbf{O}_s\vec{\mu}_p\big) \tag{updated mean} \\
+    \vec{\Sigma}_b &= \big(\mathbf{I} - \mathbf{K}\mathbf{O}_s \big)\vec{\Sigma}_p \tag{updated covariance}
+\end{align}
+Here we note that the states, observations, and actions may be vectors $\mathbf{s}$, $\mathbf{o}$, and $\mathbf{a}$, respectively.
+
+\input{algorithms/background/kalman_filter}
+
+\paragraph{Nonlinear Kalman filtering.}
+To address problems with nonlinear dynamics and Gaussian noise, the \textit{extended Kalman filter} (EKF) \cite{julier1997new} was developed. The EKF method requires differentiable functions $\mathbf{f}_T(\mathbf{s}, \mathbf{a})$ and $\mathbf{f}_O(\mathbf{a}, \mathbf{s}')$, where the Gaussian transition function is defined as $T(\mathbf{s}' \mid \mathbf{s}, \mathbf{a}) = \mathcal{N}(\mathbf{s}' \mid \mathbf{f}_T(\mathbf{s}, \mathbf{a}), \vec{\Sigma}_s)$ and the Gaussian observation function is defined as $O(\vec{o} \mid \mathbf{a}, \mathbf{s}') = \mathcal{N}(\mathbf{o} \mid \mathbf{f}_O(\mathbf{a}, \mathbf{s}'), \vec{\Sigma}_o)$ \cite{dmbook}.
+The key idea is that the EKF uses a local linear approximation of the nonlinear dynamics.
+Another extension to the standard Kalman filter, namely the \textit{unscented Kalman filter} (UKF) \cite{wan2000unscented}, can be applied in cases where the dynamics functions $\mathbf{f}_T$ and $\mathbf{f}_O$ are non-differentiable.
+The UKF uses weighted sigma point samples to approximate the continuous Gaussian belief and passes the sigma points through an unscented transform.\footnote{The \textit{unscented transform} was arbitrarily named by Jeffrey Uhlmann, inspired by a colleague's unscented deodorant to prevent the name ``Uhlmann filter'' from sticking (it's derivative-free---how clean!) \cite{unscented2021uhlmann}.}
+Sigma points are then updated by the UKF and used to reconstruct the updated $\vec{\mu}_b$ and $\vec{\Sigma}_b$ (instead of updating the nonlinear Gaussian directly).
+
+\paragraph{Particle filtering.}
+In problems with large discrete state and observation spaces or continuous problems not well approximated by linear-Gaussian dynamics, other approximations are required to estimate the belief update.
+One such method is the \textit{particle filter} \cite{gordon1993novel}, which can represent a broad range of non-parametric distributions \cite{thrun2005probabilistic}.
+In a particle filter, the belief is represented as a collection of states where each state in the approximated belief is called a \textit{state particle}.
+Shown in \cref{alg:particle_filter}, the particle filter first transitions all state particles through the stochastic transition function $s'_i \sim T(\cdot \mid s_i, a)$ for $s_i \in \mathbf{s}$, where $\mathbf{s}$ is a collection of states approximating the belief, i.e., $b \approx \mathbf{s}$.
+The particle filter then weighs each next state based on how likely the input observation $o$ is given the next states $s'_i \in \mathbf{s}'$ and current action $a$.
+Then the particles are resampled based on the particle weights, and the new approximated belief (i.e., particle set) is returned.
+
+\input{algorithms/background/particle_filter}
+
+In \cref{ch:ivae}, we learn belief updating surrogates to address problems where the observation likelihood model $O(o \mid a, s')$ may be unknown or hard to compute and where beliefs may not be well approximated directly by Gaussian distributions.
+
+\section{Planning Algorithms}\label{sec:planning_algs}
+Separating the \textit{problem structure} (i.e., POMDP definition) from the \textit{solution method} (i.e., planning algorithm) is beneficial as separate research can focus on solution methods given a variety of challenging problems.
+This section will outline several different MDP and POMDP solution methods that each have the goal of computing an (approximately) optimal policy $\pi$ that maximizes the expected discounted sum of rewards.
+
+\subsection{Offline Planning}
+In \textit{offline planning} algorithms, a policy is constructed offline (i.e., pre-computed) that maps states to actions.
+The offline policy can be represented as a lookup table that returns an action for every state.
+The offline policy can also be represented as a neural network surrogate, as shown by \textcite{mnih2013playing} in the development of deep Q-learning networks (DQNs).
+Although the differences are subtle, this work focuses on \textit{planning algorithms} and not \textit{reinforcement learning algorithms} (such as $Q$-learning \cite{watkins1989learning}).
+
+\paragraph{Planning vs. reinforcement learning.}
+In MDP and POMDP \textit{planning}, models of the transitions, rewards, and observations (for POMDPs) are known.
+In contrast, in the model-based reinforcement learning (RL) domain (or the partially observable reinforcement learning (PORL) domain), these models are learned along with a policy or value function \cite{sutton2018reinforcement,subramanian2022approximate}.
+A key difference between these settings is that RL algorithms reset the agent and learn through experience, while planning algorithms must consider future trajectories from \textit{any state}.
+When RL problems have deterministic state transitions, they can be cast as planning problems by replaying the full state trajectory along a path, which may be prohibitively expensive for long-horizon problems.
+Both settings are closely related and pose interesting research challenges.
+Specifically, sequential planning over given models in high-dimensional, long-horizon POMDPs remains challenging \cite{lauri2022partially}.
+The content of this thesis attempts to address some of these challenges.
+
+
+\subsubsection{Policy Iteration}
+In discrete MDPs with relatively small state and action spaces, \textit{policy iteration} \cite{bellman1957dynamic,sutton2018reinforcement} can be used to solve for an optimal policy.
+In policy iteration, the optimal policy $\pi^*$ is computed by iterating the following two steps \cite{dmubook}.
+Starting with any policy $\pi_0$, policy iteration performs:
+\begin{enumerate}
+    \item \textbf{Policy evaluation}: Given the current policy, compute the value function.
+    \item \textbf{Policy improvement}: Using the value function, compute an improved policy.
+\end{enumerate}
+During \textit{policy evaluation}, the current policy at iteration $k$ uses dynamic programming to compute the value function for $n$ steps (where $t \in [1,\ldots,n])$:
+\begin{equation}
+    V^\pi_t(s) = R(s, \pi(s)) + \gamma \sum_{s'} T(s' \mid s, \pi(s)) V^\pi_{t-1}(s') \quad \text{for all } s \in \mathcal{S}
+\end{equation}
+Then during \textit{policy improvement}, the value function returned from policy evaluation is used to compute the improved policy, again using the Bellman equation:
+\begin{equation}
+    \pi_{k+1}(s) = \argmax_{a \in \mathcal{A}} \left( R(s,a) + \gamma \sum_{s^\prime} T(s^\prime \mid s, a)V^{\pi_k}(s^\prime) \right)
+\end{equation}
+The resulting policy is often stored in a lookup table \cite{dmubook} so it can easily be queried during runtime usage (i.e., queries to the pre-computed offline policy online).
+In \cref{ch:betazero}, we will use the policy iteration paradigm combined with learning a neural network surrogate of the value function and an action selection policy for high-dimensional POMDPs.
+
+
+\subsubsection{Value Iteration}\label{sec:value_iteration}
+Another offline method to solve for the optimal policy in discrete MDPs is called \textit{value iteration} \cite{bellman1957dynamic}.
+Similar to policy iteration, value iteration uses dynamic programming and the Bellman equation to compute the optimal \textit{value} (or \textit{utility}) $V$ iteratively \cite{dmubook}:
+\begin{equation}\label{eq:value_function}
+    V^*(s) = \max_{a \in \mathcal{A}} \biggl( R(s,a) + \gamma \sum_{s^\prime} T(s^\prime \mid s,a) V^*(s^\prime) \biggr)
+\end{equation}
+Once the value function has converged, namely $|V_{k-1}(s) - V_k(s)| \le \epsilon$ for all $s \in \mathcal{S}$, the optimal policy $\pi^*$ can then be extracted using the final value function:
+\begin{equation}
+    \pi^*(s) = \argmax_{a \in \mathcal{A}} \biggl( R(s,a) + \gamma \sum_{s^\prime} T(s^\prime \mid s, a) V^*(s^\prime) \biggr) \label{eq:vi_policy_extraction}
+\end{equation}
+Similar to policy iteration, the policy output from value iteration can be stored in an efficient lookup table to be queried during online evaluation.
+
+
+\subsubsection{Local approximation value iteration}
+For large or continuous state spaces, approximate dynamic programming can be useful in finding approximately optimal polices for the substructure of the problem \cite{dmubook}.
+For a finite set of $n$ discretized states, a function $\beta(s)$ is used to weigh ``nearby'' states, where $\sum_{i=1}^n \beta_i(s) = 1$.
+The value $\lambda_i \in \vec{\lambda}$ for each state $s_i$ is used to approximate the value of an arbitrary state as $V(s) = \sum_{i=1}^n \lambda_i \beta_i(s) = \vec{\lambda}^\top \beta(s)$.
+Given a discretization of $n$ states, the values are initialized to zero, namely $\vec{\lambda} = \mathbf{0}$, and then the following is iterated until convergence:
+\begin{align}
+    u_i &= \max_{a \in \mathcal{A}} \left( R(s_i, a) + \gamma \sum_{s' \in s_{1:n}} T(s' \mid s_i, a)\vec{\lambda}^\top \beta(s') \right) \text{ for } i \in [1, \ldots, n] \\
+    \vec{\lambda} &= \mathbf{u}
+\end{align}
+The final policy is extracted the same way as \cref{eq:vi_policy_extraction} except now using the neighboring approximation $\beta(s)$ (also known as a \textit{kernel} function).
+To approximately solve POMDPs, \textit{local approximation value iteration} (LAVI), as presented here, can be used by discretizing the belief space and treating the problem as a belief-state MDP---as is done in \cref{ch:betazero}.
+
+\subsection{Online Planning}
+In contrast to offline methods, \textit{online planning} algorithms compute the approximately optimal action \textit{during runtime} (i.e., online).
+Online methods are often used in problems with large or continuous state, action, and observation spaces.
+Instead of explicitly constructing a policy over all states or (discretized) beliefs, online planning algorithms estimate the next best action through a planning procedure, often a best-first tree search.
+
+\subsubsection{Monte Carlo Tree Search (MCTS)}\label{sec:mcts}
+Monte Carlo tree search \cite{coulom2007efficient,browne2012survey} is an online, recursive, best-first tree search algorithm to determine the approximately optimal action to take from a given root state of an MDP.
+Extensions to MCTS have been applied to POMDPs through several algorithms: \textit{partially observable Monte Carlo planning} (POMCP) treats the state nodes as histories $h$ of action-observation trajectories \cite{silver2010pomcp}, \textit{POMCP with observation widening} (POMCPOW) constructs weighted particle sets at the observation nodes and extends POMCP to fully continuous domains \cite{sunberg2018online}, and \textit{particle filter trees} (PFT) and \textit{information PFT} (IPFT) treat the POMDP as a belief-state MDP and plan directly over the belief-state nodes using a particle filter \cite{sunberg2018online,fischer2020information}.
+All variants of MCTS execute the following four steps shown in \cref{fig:background-mcts}.
+Because MCTS can be applied to MDPs and belief-state MDPs, this section uses $s$ to represent the state, the history $h$, and the belief state $b$, and will refer to them as ``the state''.
+
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{diagrams/background/mcts.pdf}
+    \caption{The four stages of Monte Carlo tree search.}
+    \label{fig:background-mcts}
+\end{figure}
+
+
+\begin{enumerate}
+    \item \textbf{Selection.}\quad 
+    During \textit{selection}, an action is selected from the children of a state node based on criteria that balances exploration and exploitation.
+    The \textit{upper-confidence tree} algorithm (UCT) \cite{kocsis2006bandit} is a common criterion that selects an action that maximizes the upper-confidence bound $Q(s, a) + c\sqrt{\log N(s)/N(s,a)}$ 
+    where $Q(s,a)$ is the $Q$-value estimate for state-action pair $(s,a)$ with a visit count of $N(s,a)$, the total visit count of $N(s) = \sum_a N(s,a)$ for the children ${a \in A(s)}$, and an exploration constant $c > 0$.
+    \textcite{rosin2011multi} introduced the \textit{UCT with predictor} algorithm (PUCT), modified by \textcite{silver2017mastering}, where a predictor $P(s,a)$ guides the exploration towards promising branches and selects an action according to the following:
+    \begin{equation}
+        \argmax_{a \in A(s)}\ Q(s,a) + c\bigg(P(s,a)\frac{\sqrt{N(s)}}{1 + N(s,a)}\bigg) \label{eq:puct}
+    \end{equation}
+    
+    \item \textbf{Expansion.}\quad 
+    In the \textit{expansion} step, the selected action is taken in simulation and the transition model $T(s' \mid s, a)$ is sampled to determine the next state $s'$.
+    When the transitions are deterministic, then the child node is always a single state.
+    If the transition dynamics are stochastic, techniques to balance the branching factor, such as progressive widening \cite{couetoux2011continuous} and state abstraction refinement \cite{sokota2021monte}, have been proposed.
+    
+    \item \textbf{Rollout/Simulation.}\quad 
+    In the \textit{rollout} step, also called the \textit{simulation} step due to recursively simulating the MCTS tree expansion, the value is estimated through the execution of a rollout policy until termination or using heuristics to approximate the value function from the given state $s'$.
+    Expensive rollouts done by AlphaGo \cite{silver2016mastering} were replaced with a value network lookup in AlphaGo Zero and AlphaZero \cite{silver2017mastering,silver2018general}.
+    
+    \item \textbf{Backpropagation.}\quad 
+    Finally, during the \textit{backpropagation} step, the $Q$-value estimate from the rollout is propagated up the path in the tree as a running average.
+\end{enumerate}
+
+
+\paragraph{Root node action selection.}\label{par:root_selection}
+After repeating the four steps of MCTS, the final action is selected from the children $a \in A(s)$ of the root state $s$ and executed in the environment.
+One way to select the best root node action, referred to as the \textit{robust child} \cite{schadd2009monte, browne2012survey}, selects the action with the highest visit count as $\argmax_a N(s,a)$.
+Sampling from the normalized counts, exponentiated by an exploratory temperature $\tau > 0$, is also common \cite{silver2017mastering}.
+Another method uses the highest estimated $Q$-value as $\argmax_a Q(s,a)$.
+Both criteria have been shown to have problem-based trade-offs \cite{browne2012survey}.
+
+
+\paragraph{Double progressive widening.}\label{sec:dpw}
+To handle stochastic state transitions and large or continuous state and action spaces, double progressive widening (DPW) balances between sampling new nodes to expand or selecting from existing nodes already in the tree \cite{couetoux2011continuous}.
+Two hyperparameters $\alpha \in [0,1]$ and $k \ge 0$ control the branching factor.
+If the number of actions tried from state $s$ is less than $kN(s)^\alpha$, then a new action is sampled from the action space and added as a child of node $s$.
+Likewise, if the number of expanded states from node $(s,a)$ is less than $kN(s,a)^\alpha$, then a new state is sampled from the transition function $s' \sim T(\cdot \mid s, a)$ and added as a child.
+If the state widening condition is not met, then a next state is sampled from the existing children.
+Typically, different parameters $(\alpha_a, k_a)$ and $(\alpha_s, k_s)$ are used.
+
+\section{Surrogate Modeling}
+A \textit{surrogate model} is an approximate function that acts as a ``stand-in'' for unknown, complex, or more expensive functions or simulators \cite{forrester2008engineering}.
+Concretely, a surrogate model is a function $\hat{f}(\mathbf{x})$ that approximates a true function $f(\mathbf{x})$ for some input domain $\mathbf{x} \in \mathcal{X}$.
+Two commonly used surrogate models studied in this work are Gaussian processes (probabilistic surrogate models) \cite{williams2006gaussian} and neural networks (which can handle high-dimensional data) \cite{hornik1989multilayer}.
+
+\subsection{Gaussian Processes as Probabilistic Surrogate Models}\label{sec:gp}
+Probabilistic surrogate models are particularly useful in Bayesian optimization when we want to maximize or minimize some expensive, black-box function $f(\mathbf{x})$.
+
+
+\begin{figure}[b!]
+    \centering
+    \resizebox{0.85\textwidth}{!}{%
+        \input{diagrams/bsv/bayesian_optimization}
+    }
+    \caption{Example problem using GP Bayesian optimization with UCB exploration.}
+    \label{fig:bayesian_optimization}
+\end{figure}
+
+
+\paragraph{Bayesian optimization.}
+The basic optimization problem \cite{optbook} is to maximize (or minimize) a real-valued function $f: \mathbb{R}^n \to \mathbb{R}$ subject to $\vec{x}$ lying in the design space $\mathcal{X} \subseteq \mathbb{R}^n$:
+\begin{align}
+    \operatorname*{maximize}_{\vec{x}} \quad& f(\vec{x})\\
+    \textrm{subject to} \quad& \vec{x} \in \mathcal{X}\nonumber
+\end{align}
+Bayesian optimization is a black-box approach to globally optimize the objective $f$ without requiring any information about internals of the function, e.g., no requirement on gradient information \cite{frazier2018tutorial,garnett2023bayesian}.
+The main idea is to iteratively fit a \textit{probabilistic surrogate model}---such as a Gaussian process \cite{williams2006gaussian}---to evaluation points of the true objective function and then propose new design points to evaluate based on the information and uncertainty quantified in the surrogate.
+Bayesian optimization is especially useful when $f$ is computationally expensive to evaluate and the surrogate $\hat{f}$ is fast to evaluate in comparison \cite{frazier2018tutorial}.
+\Cref{fig:bayesian_optimization} illustrates a Bayesian optimization example where the next sampled design point $\vec{x}'$ (shown as a green triangle) maximizes the \textit{upper-confidence bound} (UCB) acquisition function \cite{optbook}:
+\begin{equation}
+    \vec{x}' = \argmax_{\vec{x} \in \mathcal{X}} \hat{f}(\vec{x}) + \lambda\hat{\sigma}(\vec{x})
+\end{equation}
+where $\hat{f}$ is the mean of the surrogate model, $\hat{\sigma}$ is the standard deviation, and $\lambda \ge 0$ controls the trade-off between exploration (based on the uncertainty) and exploitation (based on the mean). Using a probabilistic approach when fitting the surrogate model allows us to use uncertainty in the underlying objective when acquiring subsequent samples.
+
+
+\paragraph{Gaussian processes.}
+One method for constructing a probabilistic surrogate model is to use a \textit{Gaussian process} (GP) \cite{williams2006gaussian}. Given true observations from the objective function, a GP is defined as a distribution over possible underlying functions that describe the observations \cite{optbook} (illustrated in \cref{fig:bayesian_optimization} as purple dashed lines showing five functions sampled from the GP). 
+Given the set of $n$ inputs $\vec{X}=\{\vec{x}_1, \ldots, \vec{x}_n\}$ and $n$ true observations $\vec{y} = [y_1, \ldots, y_n]$ where $y_i = f(\vec{x}_i)$, a Gaussian process is parameterized by a mean function $\vec{m}(\vec{X})$, generally set to the zero-mean function $\vec{m}(\vec{X})_i = m(\vec{x}_i)=0$ if no prior information is given, and a kernel function $\vec{K}(\vec{X},\vec{X})$ that captures the correlations between data points as covariances.
+The output of the kernel function is an $n \times n$ matrix where the element $\vec{K}(\vec{X},\vec{X})_{i,j} = k(\vec{x}_i, \vec{x}_j)$. The kernel $k(\vec{x}_i, \vec{x}_j)$ may be selected based on spatial information about the relationship of neighboring data points in design space (e.g., if the relationship is smooth, then one can use a squared exponential kernel \cite{optbook}). In \cref{ch:bsv}, we use the isotropic Mat\'ern $1/2$ kernel \cite{marc2002matern} with length scale $\ell=\exp(-1/10)$ and signal standard deviation $s_\sigma = \exp(-1/10)$:
+\begin{equation}
+    k(\vec{x}_i, \vec{x}_j) = s_{\sigma}^2 \exp\Big(\!-|\vec{x}_i - \vec{x}_j| / \ell\Big)
+\end{equation}
+The choice of kernel and its parameters can be separately optimized depending on the problem and information about the behavior of the system (see \textcite{williams2006gaussian}), where the kernel was chosen for the work in \cref{ch:bsv} based on the characteristic that the Mat\'ern kernel can capture more variation in neighboring values \cite{williams2006gaussian}.
+Using the mean function and kernel parameterization and conditioning on the true observations $\vec{y}$, the GP produces samples for new points $\vec{X}'$ of the function it is trying to estimate as:
+\begin{gather}
+    \hat{\vec{y}} \mid \vec{y} \sim \mathcal{N}\big(\vec{\mu}(\vec{X},\vec{X}',\vec{y}), \vec{\Sigma}(\vec{X},\vec{X}')\big) \\
+    \vec{\mu}(\vec{X},\vec{X}',\vec{y}) = \vec{m}(\vec{X}') + \vec{K}(\vec{X}', \vec{X})\vec{K}(\vec{X},\vec{X})^{-1}\big(\vec{y} - \vec{m}(\vec{X})\big)\\
+    \vec{\Sigma}(\vec{X},\vec{X}') = \vec{K}(\vec{X}', \vec{X}') - \vec{K}(\vec{X}', \vec{X})\vec{K}(\vec{X},\vec{X})^{-1}\vec{K}(\vec{X}, \vec{X}')
+\end{gather}
+where $\vec{\mu}$ and $\vec{\Sigma}$ are the mean and covariance functions.
+Across the domain $\vec{X}'$, the estimates $\hat{\vec{y}}$ can now be used as surrogates for the true function $f(\vec{x}')$ for $\vec{x}' \in \vec{X}'$.
+
+
+\subsection{Neural Networks as Nonlinear Function Approximators}
+Used often in modern machine learning \cite{goodfellow2016deep}, neural networks can be used as surrogates to approximate complex nonlinear functions \cite{dmbook}.
+A neural network is a differential function $\hat{\vec{y}} = f_\theta(\vec{x})$ that is parameterized by a set of weights and biases $\theta$.
+Because the network is differentiable, the machine learning community has focused on gradient-based methods to optimize the parameters $\theta$ \cite{kingma2014adam,hinton2014rmsprop,optbook}.
+
+\begin{figure}[t!]
+    \centering
+    \includegraphics[width=0.85\textwidth]{diagrams/background/nn.pdf}
+    \caption{Neural network surrogate model approximating $\hat{\mathbf{y}} = f_\theta(\mathbf{x})$.}
+    \label{fig:ann}
+\end{figure}
+
+Neural networks are primarily used for two different tasks, namely classification and regression.
+In multi-class classification (with $K$ classes), the objective of a gradient-based optimization method is to minimize the \textit{cross-entropy loss}:
+\begin{equation}
+    \mathcal{L}_{\text{CE}}(y, \hat{y}; \theta) = -\frac{1}{n}\sum_{i=1}^n\sum_{k=1}^K y^{(k)}_i \log \hat{y}^{(k)}_i
+\end{equation}
+where $y$ is the one-hot encoded true class label and $\hat{y}$ is the predicted probability distribution over the $K$ classes for $n$ batches.
+The predicted probabilities are obtained by applying a \textit{softmax} function to the vector of logits $z = [z_1, \dots, z_K]$ output by the neural network:
+\begin{equation}
+    \hat{y}^{(k)} = \frac{\exp z_k}{\sum_{j=1}^K \exp z_j}
+\end{equation}
+For single-class classification, e.g., in cases where we want to predict a failure ($y = 1$) or success ($y=0$), the \textit{binary cross-entropy} loss is used instead:
+\begin{equation}
+    \mathcal{L}_{\text{BCE}}(y, \hat{y}; \theta) = -\frac{1}{n} \sum_{i=1}^n \Big( y_i \log \big(\sigma(\hat{y}_i)\big) + (1 - y_i) \log \big(1 - \sigma(\hat{y}_i)\big) \Big)
+\end{equation}
+where $\sigma(z) = 1 / (1 + \exp(-z))$ is the sigmoid function ensuring the prediction lies in $[0,1]$.
+
+In regression tasks, the objective is to approximate a real-valued function for outputs $y \in \mathbb{R}^d$.
+This is often done by minimizing the mean-squared error or mean-absolute error between the true output $y$ and prediction $\hat{y}$:
+\begin{align}
+    \mathcal{L}_\text{MSE}(y, \hat{y}; \theta) &= \frac{1}{n} \sum_{i=1}^n (y_i - \hat{y}_i)^2 \\
+    \mathcal{L}_\text{MAE}(y, \hat{y}; \theta) &= \frac{1}{n} \sum_{i=1}^n |y_i - \hat{y}_i|
+\end{align}
+
+\Cref{ch:ivae} further details neural network surrogates and how they can be used as generative models to sample from the posterior belief given the current observations.
+
+
+
+\section{Safety Validation}\label{sec:safety_validation}
+
+To validate safety-critical systems, developers often perform \textit{safety validation} \cite{corso2021survey}.
+Safety validation has three primary tasks shown in \cref{fig:safety_validation}.
+Given a system under test $f(\mathbf{x})$, its design space $\mathbf{x} \in \mathcal{X}$, and a property specification $\psi$ \cite{donze2010robust}, where $f(\mathbf{x}) \not\in \psi$ indicates the system violated the specification, we get the following tasks:
+\begin{enumerate}
+    \item \textbf{Falsification:} The process of finding \textit{any} input $\mathbf{x}$ that results in a system failure \cite{donze2010breach}:
+    \begin{equation}
+        \mathbf{x} \quad \text{s.t.} \quad f(\mathbf{x}) \not\in \psi
+    \end{equation}
+    \item \textbf{Most-likely failure analysis:} Finding the failure with the maximum likelihood under the nominal distribution $p(\mathbf{x})$ \cite{lee2020adaptive}:
+    \begin{equation}
+        \argmax_{\mathbf{x} \in \mathcal{X}} p(\mathbf{x}) \quad \text{s.t.} \quad f(\mathbf{x}) \not\in \psi
+    \end{equation}
+    \item \textbf{Failure probability estimation:} Estimating the probability that a failure will occur under the nominal distribution $p(\mathbf{x})$ over the domain of the design space $\mathbf{x} \in \mathcal{X}$ \cite{gooley1999estimation}:
+    \begin{equation}
+        p_\text{fail} = \mathbf{E}_p \big[ \mathds{1}\{f(\mathbf{x}) \not\in \psi \} \big]
+    \end{equation}
+\end{enumerate}
+
+If methods focus on failure probability estimation, then it is often the case that all three safety validation tasks can be achieved.
+This is because when estimating the probability of failure, samples from the normalized distribution of failures are produced.
+Thus, we achieve falsification by finding failures in the process of constructing the distribution and can easily compute the most-likely failure by maximizing the input likelihood across the nominal distribution.
+Motivated to achieve all three safety validation tasks, the work in \cref{ch:bsv} develops an efficient approach to estimate probability of failure for black-box systems.
+For a survey of existing black-box safety validation algorithms, including falsification and most-likely failure analysis, we refer to \textcite{corso2021survey}.
+
+
+\begin{figure}[t]
+    \centering
+    \resizebox{\textwidth}{!}{%
+        \input{diagrams/bsv/safety-validation-diagram}
+    }
+    \caption{The three tasks of safety validation.}
+    \label{fig:safety_validation}
+\end{figure}
+
+
+\paragraph{Black-box vs. white-box validation.}
+In the case of \textit{black-box safety validation}, we treat the system $f$ as a ``black box'' and attempt to perform the three tasks described above.
+The black-box assumption means that the only way to interact with the system is by passing inputs $\vec{x}$ and observing outputs $y = f(\vec{x})$.
+This is in contrast to \textit{white-box validation} which requires information about the internals of the system to prove properties of safety \cite{schumann2001automated,fitting2012firstorder,clarke2018handbook}.
+In choosing to perform black-box validation, we can apply methods to more general systems, particularly to systems with neural network components.
+Although recent work has focused on verifying small neural networks \cite{katz2017reluplex,liu2021algorithms,sidrane2022overt}, scaling to large networks remains a challenge \cite{konig2024critically}.
+\Cref{ch:bsv} investigates an approach that attempts to address this challenge.

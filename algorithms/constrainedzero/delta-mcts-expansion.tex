@@ -1,0 +1,15 @@
+\begin{algorithm}[H]
+    \caption{$\Delta$-MCTS belief-state expansion.}
+    \label{alg:delta-zero-expansion}
+    \begin{algorithmic}[1]
+        \Function{BeliefStateExpansion}{$b,a$}
+            \If {$|B(b,a)| \le k_b N(b,a)^{\alpha_b}$} \Comment{belief progressive widening}
+                \State $b', r, \new{p} \sim G_b(b, a)$ \Comment{generative model}
+                \State $B(b,a) \leftarrow B(b,a) \cup \{(b',r,\new{p})\}$
+            \Else
+                \State $b', r, \new{p} \sim B(b,a)$
+            \EndIf
+            \State \Return $b', r, \new{p}$
+        \EndFunction
+    \end{algorithmic}
+\end{algorithm}

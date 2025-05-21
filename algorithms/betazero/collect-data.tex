@@ -1,0 +1,24 @@
+\begin{algorithm}[H]
+    \caption{MCTS data collection for offline policy evaluation.} 
+    \label{alg:collect_data}
+    \begin{algorithmic}[1]
+        \Function{CollectData$(\mathcal{P}, f_\theta, \psi)$}{}
+        \State $\mathcal{D} = \emptyset$
+        \ParallelFor{$i \leftarrow 1 \textbf{ to } n_\text{data}$} \Comment{parallelize MCTS runs across available CPUs} \label{line:parallel}
+            \For {$t \leftarrow 1 \textbf{ to } T$}
+                \State $a_t \leftarrow \textproc{MCTS}(\mathcal{P}, f_\theta, b_t, \psi)$ \Comment{select next action through online planning}
+                \State $\mathcal{D}_i^{(t)} \leftarrow \mathcal{D}_i^{(t)} \cup \big\{(b_t, \bpi_\text{tree}^{(t)}, g_t) \big\}$ \Comment{collect belief and policy data (returns buffer)}
+                \State $s_{t+1} \sim T(\cdot \mid s_t, a_t)\phantom{\big\}}$
+                \State $o_t \sim O(\cdot \mid a_t, s_{t+1})$
+                \State $b_{t+1} \leftarrow \textproc{Update}(b_t, a_t, o_t)$
+                \hspace*{3em}%
+                \rlap{\raisebox{\dimexpr.5\normalbaselineskip+.5\jot}{\smash{$\left.\begin{array}{@{}c@{}}\\{}\\{}\\{}\end{array}\right\}%
+                \begin{tabular}{l}transition the original POMDP\end{tabular}$}}}
+                \State $r_t \leftarrow R(s_t, a_t)$ or $R(s_t, a_t, s_{t+1})$
+            \EndFor
+            \State $g_t \leftarrow \sum_{k=t}^T \gamma^{(k-t)} r_k$ \textbf{ for } $t \leftarrow 1 \textbf{ to } T$ \Comment{compute returns from observed rewards}
+        \EndParallelFor
+        \State \Return $\mathcal{D}$
+    \EndFunction
+    \end{algorithmic}
+\end{algorithm}

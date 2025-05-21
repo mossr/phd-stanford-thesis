@@ -1,0 +1,12 @@
+\begin{algorithm}[H]
+    \caption{$\mathcal{I}$-VAE forward pass.} 
+    \label{alg:ivae_forward}
+    \begin{algorithmic}[1]
+    \Require $s, \mathbf{o}$ (state and observations)
+    \State Compute $h_s$, $\mu_s$, and $\log \sigma^2_s$ from state encoder $h_s = \mathcal{E}_s(s)$ and $q_\phi(z \mid s)$
+    \State Sample $z \sim q_\phi(z \mid s)$ using state encoding $h_s$
+    \State Compute $h_\mathbf{o}$, $\mu_\mathbf{o}$, and $\log \sigma^2_\mathbf{o}$ from observation encoder $h_\mathbf{o} = \mathcal{E}_\mathbf{o}(\mathbf{o})$ and $p_\psi(z \mid \mathbf{o})$
+    \State Decode $\hat{s}$ from $p_\theta(s \mid z, \mathbf{o})$ using $z$ and observation encoding $h_\mathbf{o}$
+    \State \Return $(\hat{s}, \mu_s, \log \sigma^2_s, \mu_\mathbf{o}, \log \sigma^2_\mathbf{o})$
+    \end{algorithmic}
+\end{algorithm}

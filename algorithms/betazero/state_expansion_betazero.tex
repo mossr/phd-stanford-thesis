@@ -1,0 +1,16 @@
+\begin{algorithm}[H]
+    \caption{BetaZero belief-state progressive widening.}
+    \label{alg:betazero-state-pw}
+    \begin{algorithmic}[1]
+        \Function{BeliefStateExpansion$(b,a)$}{}
+            \If {$|B(b,a)| \le k_b N(b,a)^{\alpha_b}$} \Comment{belief progressive widening}
+                \State $b' \sim T_b(\cdot \mid b, a)$ \Comment{\cref{eq:tb_update} from \cref{ch:preliminaries}}
+                \State $B(b,a) \leftarrow B(b,a) \cup \{b'\}$ \Comment{add to visited beliefs}
+            \Else
+                \State $b' \sim B(b,a)$ \Comment{sample from belief-states in the tree}
+            \EndIf
+            \State $r \leftarrow R(b, a)$ or $r \leftarrow R(b, a, b')$
+            \State \Return $b', r$
+        \EndFunction
+    \end{algorithmic}
+\end{algorithm}

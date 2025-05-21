@@ -1,0 +1,22 @@
+\begin{algorithm}[H]
+    \caption{$\Delta$-MCTS action selection.}
+    \label{alg:delta-zero-selection}
+    \begin{algorithmic}[1]
+        \Function{ActionSelection}{$f_\theta, b$}
+            \State $\tilde{b} \leftarrow \phi(b)$
+            \If {$| A(b) | \le k_a N(b)^{\alpha_a}\phantom{\tilde{b}}$} \Comment{action progressive widening}
+                \State $a \sim P_\theta(\tilde{b}, \cdot)$ \Comment{prioritized from network}
+                \If {$a \not\in A(b)$}
+                    \State $N(b,a) \leftarrow N_0(b,a)$
+                    \State $Q(b,a) \leftarrow Q_0(b,a)$ \label{line:delta_mcts_init_q}
+                    \State \new{$F(b,a) \leftarrow F_0(b, a)$}
+                    \State \new{$\Delta(b) \leftarrow \Delta_0$} \Comment{target tolerance $\Delta_0$}
+                    \State \new{$\textproc{Adaptation}(\Delta, b, a)$}
+                    \State $A(b) \leftarrow A(b) \cup \{a\}$
+                \EndIf
+            \EndIf
+            \State \Return $\argmax\limits_{a \in A(b)}\, \widebar{Q}(b,a) + c\Big(P_\theta(\tilde{b},a)\frac{\sqrt{N(b)}}{1{+}N(b,a)}\Big)$ \Comment{CC-PUCT}
+            \State \phantom{\Return} \new{$\phantom{arg\:\:\:}\text{s.t.}\ F(b,a) \le \Delta'(b)$}
+        \EndFunction
+    \end{algorithmic}
+\end{algorithm}

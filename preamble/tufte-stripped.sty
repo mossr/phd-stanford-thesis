@@ -1,0 +1,284 @@
+%%
+%% This file contains the code that is common to the Tufte-LaTeX document classes.
+%% Modified to fit with SUTHESIS TEMPLATE !!
+%%
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{tufte-stripped}[2019/07/22]
+
+%%
+% The `xkeyval' package simplifies the user interface for the document class options
+\RequirePackage{xkeyval}
+
+%%
+% We use the `xifthen' package to handle our package option switches
+\RequirePackage{xifthen}
+%%
+% The titlesec and titletoc packages are used to change the style of the
+% section headings.  These packages should be loaded before the hyperref
+% package.
+
+\RequirePackage{titlesec,titletoc}
+
+
+%%
+% We use the `xifthen' package to handle our package option switches
+\RequirePackage{xifthen}
+
+%%
+% `symmetric' option -- puts marginpar space to the outside edge of the page
+%   Note: this option forces the twoside option (see the .cls files)
+
+\newboolean{@tufte@symmetric}
+\DeclareOptionX[tufte]<common>{symmetric}{
+  \setboolean{@tufte@symmetric}{true}
+  \@tufte@info@noline{The `symmetric' option implies `twoside'}
+  \ExecuteOptionsX[tufte]<common>{twoside}
+}
+
+%%
+% `twoside' option -- alternates running heads
+
+\newboolean{@tufte@twoside}
+\DeclareOptionX[tufte]<common>{twoside}{%
+  \setboolean{@tufte@twoside}{true}
+  \@tufte@info@noline{Passing the `twoside' option to the `\@tufte@class' class}
+  \PassOptionsToClass{twoside}{\@tufte@class}
+}
+
+
+%%
+% `notoc' option -- suppresses the Tufte-style table of contents
+
+\newboolean{@tufte@toc}
+\setboolean{@tufte@toc}{true}
+\DeclareOptionX[tufte]<common>{notoc}{\setboolean{@tufte@toc}{false}}
+\DeclareOptionX[tufte]<common>{toc}{\setboolean{@tufte@toc}{true}}
+
+\ProcessOptionsX*[tufte]<common>\relax
+
+%%
+% Tighten up space between displays (e.g., a figure or table) and make symmetric
+
+\setlength\abovedisplayskip{6pt plus 2pt minus 4pt}
+\setlength\belowdisplayskip{6pt plus 2pt minus 4pt}
+
+%%
+% Require paralist package for tighter lists
+
+\RequirePackage{paralist}
+
+%%
+% Italicize description run-in headings (instead of the default bold)
+
+\renewcommand*\descriptionlabel[1]{\hspace\labelsep\normalfont\em #1}
+
+
+%%
+% Used for doublespacing, and other linespacing
+
+\RequirePackage{setspace}
+
+%%
+% Color
+\RequirePackage[dvipsnames,svgnames]{xcolor}% load before bidi
+
+
+%%
+% Turns newlines into spaces.  Based on code from the `titlesec' package.
+
+\DeclareRobustCommand{\@tufte@newlinetospace}{%
+  \@ifstar{\@tufte@newlinetospace@i}{\@tufte@newlinetospace@i}%
+}
+
+\def\@tufte@newlinetospace@i{%
+  \ifdim\lastskip>\z@\else\space\fi
+  \ignorespaces%
+}
+
+\DeclareRobustCommand{\newlinetospace}[1]{%
+  \let\@tufte@orig@cr\\% save the original meaning of \\
+  \def\\{\@tufte@newlinetospace}% turn \\ and \\* into \space
+  \let\newline\\% turn \newline into \space
+  #1%
+  \let\\\@tufte@orig@cr% revert to original meaning of \\
+}
+
+
+%%
+% Amount of space to skip before \newthought or after title block
+
+\newskip\tufteskipamount
+\tufteskipamount=1.0\baselineskip plus 0.5ex minus 0.2ex
+
+\newcommand{\tuftebreak}{\par\ifdim\lastskip<\tufteskipamount
+  \removelastskip\penalty-100\tufteskip\fi}
+
+\newcommand{\tufteskip}{\vspace\tufteskipamount}
+%%
+% Make Tuftian-style section headings and TOC formatting
+
+\titleclass{\part}{top}
+\titleformat{\part}%
+[display]% shape
+{}% format applied to label+text
+    {\huge\smallcaps{Part~\thepart:}}% label
+    {1em}% horizontal separation between label and title body
+    {\huge\rmfamily\smallcaps}% before the title body
+
+% \titleclass{\myappend}{top}
+% \titleformat{\myappend}%
+% [display]% shape
+% {}% format applied to label+text
+%     {\huge\smallcaps{Part~\themyappend:}}% label
+%     {1em}% horizontal separation between label and title body
+%     {\huge\rmfamily\smallcaps}% before the title body
+
+\titleformat{\chapter}%
+    [display]% shape
+    {\bfseries\LARGE}% format applied to label+text
+	{Chapter \thechapter}% label
+	{1em}% horizontal separation between label and title body
+	{\LARGE\rmfamily\bfseries}% before the title body
+
+\titleformat{\section}%
+  [hang]% shape
+  {\normalfont\Large\bfseries}% format applied to label+text
+  {\thesection}% label
+  {1em}% horizontal separation between label and title body
+  {}% before the title body
+  []% after the title body
+
+\titleformat{\subsection}%
+  [hang]% shape
+  {\normalfont\large\bfseries}% format applied to label+text
+  {\thesubsection}% label
+  {1em}% horizontal separation between label and title body
+  {}% before the title body
+  []% after the title body
+
+\titleformat{\paragraph}%
+  [runin]% shape
+  {\normalfont\bfseries}% format applied to label+text
+  {\theparagraph}% label
+  {1em}% horizontal separation between label and title body
+  {}% before the title body
+  []% after the title body
+
+\titlespacing*{\chapter}{0pt}{50pt}{40pt}
+\titlespacing*{\section}{0pt}{3.5ex plus 1ex minus .2ex}{2.3ex plus .2ex}
+\titlespacing*{\subsection}{0pt}{3.25ex plus 1ex minus .2ex}{1.5ex plus.2ex}
+
+\ifthenelse{\boolean{@tufte@toc}}{%
+	\titlecontents{part}%
+	[0em] % distance from left margin
+	{\vspace{0.25em}\vspace{\baselineskip}\LARGE\rmfamily\scshape\addfontfeature{LetterSpace=10}} % above (global formatting of entry)
+		{\hspace*{0em}\contentslabel{0em}\hspace*{0.5in}} % before w/label (label = ``2'')
+		{\hspace*{0em}part\hspace*{0.5em}\contentslabel{0em}\lowercase} % before w/o label
+		{} % filler + page (leaders and page num)
+		[] % after
+    \titlecontents{appendixpart}%
+	[0em] % distance from left margin
+	{\vspace{0.5em}\vspace{\baselineskip}\LARGE\rmfamily\scshape\addfontfeature{LetterSpace=10}} % above (global formatting of entry)
+		{\hspace*{0em}\contentslabel{0em}\hspace*{0.5in}} % before w/label (label = ``2'')
+		{\hspace*{0em}\contentslabel{0em}\lowercase} % before w/o label
+		{} % filler + page (leaders and page num)
+		[] % after
+    \titlecontents{myappend}%
+	[0em] % distance from left margin
+	{\vspace{0.25em}\vspace{\baselineskip}\LARGE\rmfamily\scshape\addfontfeature{LetterSpace=10}} % above (global formatting of entry)
+		{\hspace*{0em}\contentslabel{0em}\hspace*{0.5in}} % before w/label (label = ``2'')
+		{\hspace*{0em}myappend\hspace*{0.5em}\contentslabel{0em}\lowercase} % before w/o label
+		{} % filler + page (leaders and page num)
+		[] % after
+    \titlecontents{chapter}%
+	[0em] % distance from left margin
+	{\vspace{0.5\baselineskip}\large\rmfamily\bfseries} % above (global formatting of entry)
+		{\hspace*{0em}\contentslabel{0em}\hspace*{0.5in}} % before w/label (label = ``2'')
+		{\hspace*{0em}} % before w/o label
+		{\rmfamily\hfill\thecontentspage} % filler + page (leaders and page num)
+		[] % after
+	\titlecontents{section}% FIXME
+	[0.5in] % distance from left margin
+	{\vspace{0\baselineskip}\normalsize\rmfamily} % above (global formatting of entry)
+		{\hspace*{0.5in}\contentslabel{0.5in}} % before w/label (label = ``2.6'')
+		{\hspace*{0.5in}} % before w/o label
+		{\rmfamily\hfill\thecontentspage} % filler + page (leaders and page num)
+    [] % after
+  \titlecontents{subsection}% FIXME
+	[1.0in] % distance from left margin
+	{\vspace{0\baselineskip}\footnotesize\rmfamily} % above (global formatting of entry)
+		{\hspace*{0.5in}\contentslabel{0.5in}} % before w/label (label = ``2.6'')
+		{\hspace*{0.5in}} % before w/o label
+		{\rmfamily\hfill\thecontentspage} % filler + page (leaders and page num)
+		[] % after
+}{}
+
+%%
+% Format lists of figures/tables
+
+\renewcommand\listoffigures{%
+    \chapter*{\listfigurename}%
+%  \begin{fullwidth}%
+    \@starttoc{lof}%
+%  \end{fullwidth}%
+}
+
+\renewcommand\listoftables{%
+    \chapter*{\listtablename}%
+
+%  \begin{fullwidth}%
+    \@starttoc{lot}%
+%  \end{fullwidth}%
+}
+
+\newcommand{\@tufte@lof@line}[2]{%
+  % #1 is the figure/table number and its caption text
+  % #2 is the page number on which the figure/table appears
+  \leftskip 0.0em
+  \rightskip 0em
+  \parfillskip 0em plus 1fil
+  \parindent 0.0em
+  \@afterindenttrue
+  \interlinepenalty\@M
+  \leavevmode
+  \@tempdima 2.0em
+  \advance\leftskip\@tempdima
+  \null\nobreak\hskip -\leftskip
+  {#1}\nobreak\hfill\nobreak#2%
+  \par%
+}
+
+\renewcommand*\l@figure{\@tufte@lof@line}
+\let\l@table\l@figure
+
+
+% Handle the Algorithm floats
+\usepackage[chapter]{algorithm}
+\usepackage[noend]{algcompatible}
+\usepackage[noend]{algpseudocode} % algpseudocode needs to be loaded AFTER algcompatible
+\renewcommand\algorithmicthen{}
+\renewcommand\algorithmicdo{}
+
+\usepackage{mdframed}
+\definecolor{shadecolor}{rgb}{1,0.8,0.3}
+
+\renewcommand\listofalgorithms{%
+	\chapter*{\listalgorithmname}%
+	%  \begin{fullwidth}%
+	\@starttoc{loa}%
+	%  \end{fullwidth}%
+}
+\let\l@algorithm\l@figure
+
+
+%%
+% A handy command to disable hyphenation for short bits of text.
+% Borrowed from Peter Wilson's `hyphenat' package.
+
+\AtBeginDocument{%
+  \@ifpackageloaded{hyphenat}{}{%
+    \newlanguage\langwohyphens% define a language without hyphenation rules
+    \providecommand{\nohyphens}[1]{{\language\langwohyphens #1}}% used for short bits of text
+    \providecommand{\nohyphenation}{\language\langwohyphens}% can be used inside environments for longer text
+  }%
+}

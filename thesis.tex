@@ -1,0 +1,48 @@
+\documentclass[11pt,letterpaper]{report}
+
+\usepackage{sisl-suthesis}
+
+\dept{Computer Science}
+\title{Safe planning under uncertainty\\using surrogate models}
+\author{Robert J. Moss}
+
+\principaladviser{Mykel J. Kochenderfer}
+\firstreader{Clark Barrett}
+\secondreader{Jef Caers}
+
+\addbibresource{references.bib}
+
+\input{preamble/preamble}
+
+\begin{document}
+
+\beforepreface
+\input{parts/abstract}
+\input{parts/acknowledgments}
+\afterpreface
+
+\part{Background}\label{part:background}
+\input{parts/background/introduction}
+\input{parts/background/problems}
+\input{parts/background/preliminaries}
+
+\part{Planning at Scale}\label{part:planning}
+\input{parts/planning/batched-belief-mdp}
+\input{parts/planning/belief-surrogates}
+\input{parts/planning/betazero}
+
+\part{Safe Planning}\label{part:safety}
+\input{parts/safety/constrainedzero}
+\input{parts/safety/bayesian-safety-validation}
+
+\part{Conclusions}\label{part:conclusions}
+\input{parts/conclusions/summary}
+\input{parts/conclusions/contributions}
+\input{parts/conclusions/future-work}
+
+\cleardoublepage
+\phantomsection
+\addcontentsline{toc}{chapter}{Bibliography}
+\printbibliography
+
+\end{document}

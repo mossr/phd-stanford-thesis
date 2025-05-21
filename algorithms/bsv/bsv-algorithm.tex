@@ -1,0 +1,24 @@
+\begin{algorithm}[H]
+    \caption{Bayesian safety validation algorithm.} 
+    \label{alg:bsv}
+    \begin{algorithmic}[1]
+    \Function{BayesianSafetyValidation$(f, p, T)$}{}
+    \State $\mathcal{GP} \leftarrow \textproc{InitializeGaussianProcess}(m, k)$
+    \State $\vec{X}, \vec{Y}, \vec{W} \leftarrow \emptyset, \emptyset, \emptyset$
+    \For {$t \leftarrow 1$ \textbf{to} $T$}
+        \State $\vec{X}', \vec{W}' \leftarrow \hyperlink{link:fsar}{\textproc{FailureSearchAndRefinement}}(\mathcal{GP}, p, t)$ \Comment{select new design points} \label{line:subsequent_points}
+        \State $\vec{Y}' \leftarrow \{f(\vec{x}') \mid \vec{x}' \in \vec{X}'\}$ \Comment{evaluate true system $f$ across design points}
+        \State $\vec{X}, \vec{Y}, \vec{W} \leftarrow \vec{X} \cup \vec{X}',\, \vec{Y} \cup \vec{Y}',\, \vec{W} \cup \vec{W}'$ \Comment{append to input, output, and weight sets}
+
+        \State $\mathcal{GP} \leftarrow \textproc{Fit}(\mathcal{GP}, \vec{X}, \vec{Y})$ \Comment{refit surrogate model over all points}
+    \EndFor
+    \State $\vec{X}_\text{fail} \leftarrow \big\{\vec{x}_i \mid \vec{x}_i \in \vec{X},\, y_i \in \vec{Y},\, \mathds{1}\{y_i\}\big\}$ \Comment{(1) falsification} \label{line:falsification}
+    \State $\vec{x}^* \leftarrow \argmax_{\vec{x}_i \in \vec{X}, y_i \in \vec{Y}} p(\vec{x}_i)\mathds{1}\{y_i\}$ \Comment{(2) most-likely failure} \label{line:mlfa}
+    \State $\hat{p}_\text{fail} \leftarrow \begin{cases}
+        \frac{1}{n} \sum_{i=1}^n \frac{p(\vec{x}_i)}{q(\vec{x}_i)} \mathds{1}\left\{\hat{f}(\vec{x}_i) \ge 0.5 \right\} & \text{if deterministic} \\
+        \left(\sum_{i=1}^n \vec{W}_i \vec{Y}_i\right) / \sum_{i=1}^n \vec{W}_i & \text{if stochastic}
+    \end{cases}$ \Comment{(3) failure probability est.} \label{line:fpe}
+    \State \Return $\vec{X}_\text{fail}, \vec{x}^*, \hat{p}_\text{fail}$ \Comment{return all three safety validation tasks}
+    \EndFunction
+    \end{algorithmic}
+\end{algorithm}

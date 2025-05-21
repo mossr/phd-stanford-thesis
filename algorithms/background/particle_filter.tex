@@ -1,0 +1,12 @@
+\begin{algorithm}[h]
+    \caption{Particle filter belief updater.}
+    \label{alg:particle_filter}
+    \begin{algorithmic}
+    \Function{ParticleFilter$(\mathbf{s}, a, o)$}{}
+    \State $\mathbf{s}^\prime \sim T(\cdot \mid \mathbf{s}, a)$ \Comment{propagate past particles $\mathbf{s}$ through the transition model}
+    \State $\mathbf{w} \leftarrow O(o \mid \mathbf{s}^\prime, a)$ \Comment{weight next states based on the observation model}
+    \State $\text{particles} \sim \operatorname{SetCategorical}\left(\mathbf{s}^\prime, \frac{\mathbf{w}}{\sum_i w_i}\right)$ \Comment{sample new particles with normalized weights}
+    \State \Return $\text{particles}$
+    \EndFunction
+    \end{algorithmic}
+\end{algorithm}

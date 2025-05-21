@@ -1,0 +1,14 @@
+\begin{algorithm}[H]
+    \caption{$\Delta$-MCTS adaptation.}
+    \label{alg:delta-zero-adaptation}
+    \new{
+    \begin{algorithmic}[1]
+        \Function{Adaptation}{$\Delta, b, a$}
+            \State \new{$l(b) \leftarrow \min_{a' \in A(b)} F(b,a')$} \Comment{update bounds}
+            \State \new{$u(b) \leftarrow \max_{a' \in A(b)} F(b,a')$}
+            \State \new{$\text{err} \leftarrow \mathds{1}\{F(b,a) > \Delta(b)\}$}
+            \State \new{$\Delta(b) \leftarrow \operatorname{clip}\!\big(\Delta(b) + \eta(\text{err} - \ \Delta_0),\, l(b),\, u(b)\big)$}
+        \EndFunction
+    \end{algorithmic}
+    }
+\end{algorithm}

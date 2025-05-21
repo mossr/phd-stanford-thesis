@@ -1,0 +1,1010 @@
+\chapter{Planning and Learning in Belief Space}\label{ch:betazero}
+\chapterquote{You should consider that Imitation is the most acceptable part of Worship, and that the Gods had much rather Mankind should Resemble, than Flatter them.}{Jeremy Collier and Andr\'e Dacier}[0.55\linewidth]
+
+Real-world planning problems, including autonomous driving and sustainable energy applications like carbon storage and resource exploration, have recently been modeled as partially observable Markov decision processes (POMDPs) and solved using approximate methods.
+To solve high-dimensional POMDPs in practice, state-of-the-art methods use online planning with problem-specific heuristics to reduce planning horizons and make the problems tractable, as done in \cref{ch:ivae}.
+Algorithms that learn approximations to replace heuristics have recently found success in large-scale fully observable domains \cite{silver2018general}.
+The key insight is to use the combination of online Monte Carlo tree search with offline neural network approximations of the optimal policy and value function.
+In this chapter, we bring this insight to partially observable domains and propose \textit{BetaZero}, a belief-state planning algorithm for high-dimensional POMDPs.
+BetaZero learns offline approximations that replace heuristics to enable online decision making in long-horizon problems.
+We address several challenges inherent in large-scale partially observable domains; namely challenges of transitioning in stochastic environments, prioritizing action branching with a limited search budget, and representing beliefs as input to the network.
+To formalize the use of all limited search information, we train against a novel $Q$-weighted visit counts policy.
+We test BetaZero on various well-established POMDP benchmarks found in the literature and a real-world problem of critical mineral exploration.
+Experiments show that BetaZero outperforms state-of-the-art POMDP solvers on a variety of tasks.
+
+
+\section{Motivation}
+Optimizing sequential decisions in real-world settings is challenging due to uncertainties about the true state of the environment.
+Modeling such problems as partially observable Markov decision processes (POMDPs) has shown recent success in autonomous driving \cite{wray2021pomdps}, robotics \cite{lauri2022partially}, and aircraft collision avoidance \cite{kochenderfer2012next}.
+Solving large or continuous POMDPs requires approximations in the form of state-space discretizations or modeling assumptions, e.g., assuming full observability \cite{littman1995learning}.
+Although these approximations are useful when making decisions in a short time horizon, scaling these solutions to long-horizon problems remains challenging \cite{shani2013survey}.
+
+\begin{figure}[t]
+    \captionsetup{font={small}}
+    \centering
+    \begin{subfigure}[t]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{diagrams/betazero/reduce-breadth.pdf}
+        \caption{Goal: Reduce tree search breadth.}
+        \label{fig:reduce_depth}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{diagrams/betazero/reduce-depth.pdf}
+        \caption{Goal: Reduce tree search depth}
+        \label{fig:reduce_breadth}
+    \end{subfigure}
+    \caption{Motivation to reduce tree search breadth and depth in online tree search.}
+    \label{fig:tree_search_motivation}
+\end{figure}
+
+Recently, POMDPs have been used to model large-scale information gathering problems such as carbon capture and storage (CCS) \cite{corso2022pomdp,wang2023optimizing}, remediation for groundwater contamination \cite{wang2022sequential}, and critical mineral exploration for battery metals \cite{mern2023intelligent}, and are solved using online tree search methods such as DESPOT \cite{ye2017despot} and POMCPOW \cite{sunberg2018online}.
+The performance of these online methods relies on heuristics for action selection (to reduce search tree expansion) and heuristics to estimate the value function (to avoid expensive rollouts and reduce tree search depth, illustrated in \cref{fig:tree_search_motivation}).
+Without heuristics, online methods have difficulty planning for long-term information acquisition to reason about uncertain future events.
+Thus, algorithms to solve high-dimensional POMDPs need to be designed to learn heuristic approximations to enable decision making in long-horizon problems.
+
+\section{Proposed Algorithm: BetaZero}\label{sec:betazero}
+In this chapter, we propose a policy iteration algorithm for POMDPs with the goal to reduce both breadth and depth of online Monte Carlo tree search (MCTS) planning by learning neural network surrogates for the action selection policy and value function, respectively.
+We introduce the \textit{BetaZero} POMDP planning algorithm that replaces heuristics with learned approximations of the optimal policy and value function.
+BetaZero is a belief-space policy iteration algorithm with two \textit{offline} steps (\cref{fig:betazero-alg}) that learns a network used \textit{online}:
+\begin{enumerate}
+    \item \textbf{Policy evaluation}: Evaluate the current value and policy network through $n$ parallel episodes of MCTS (\cref{fig:mcts-betazero}) and collect training data: $\mathcal{D} = \left\{\{(b_t, \bpi_t, g_t)\}_{t=1}^T\right\}_{i=1}^n$
+    \item \textbf{Policy improvement}: Improve the value function and policy by retraining the neural network parameters $\theta$ with data from the $n_\text{buffer}$ most recent MCTS simulations.
+\end{enumerate}
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.91\linewidth]{diagrams/betazero/betazero-policy-iteration.pdf}
+    \caption{The \textit{BetaZero} POMDP policy iteration algorithm.}
+    \label{fig:betazero-alg}
+\end{figure}
+The policy vector over actions $\vect{p} = P_\theta(\tilde{b}, \cdot)$ and the value $v = V_\theta(\tilde{b})$ are combined into a single network with two output heads $(\vect{p}, v) = f_\theta(\tilde{b})$; we refer to $P_\theta$ and $V_\theta$ separately for convenience.
+During \textit{policy evaluation}, training data is collected from the outer POMDP loop.
+The belief $b_t$ and the tree policy $\bpi_t$ are collected for each time step $t$.
+At the end of each episode, the returns $g_t = \sum_{i=t}^T \gamma^{(i-t)} r_i$ are computed from the set of observed rewards for all time steps up to a terminal horizon $T$.
+Traditionally, MCTS algorithms use a tree policy $\bpi_t$ that is proportional to the root node visit counts of its children actions $\bpi_t(b_t, a) \propto N(b_t,a)^{1/\tau}$.
+The counts are sampled after exponentiating with a temperature $\tau$ to encourage exploration but evaluated online with $\tau \to 0$ to return the maximizing action \cite{silver2017mastering}.
+In certain settings, relying solely on visit counts may overlook crucial information (see ablation in \cref{fig:q-weighting}).
+Given the collected data, the \textit{policy improvement} step is intended to imitate the MCTS policy.
+
+\Cref{fig:mcts-betazero} shows the four stages of MCTS belief-state planning used in BetaZero.
+The learned action selection policy $P_\theta$ is used to sample new actions (if expanding on new actions according to the progressive widening procedure \cite{couetoux2011continuous}) and to weigh the action selection criteria to emphasize promising actions as indicated by the learned policy.
+The value $V_\theta$ is used to avoid expensive rollouts and directly estimate the future value given an updated belief.
+This version of MCTS is used during the \textit{policy evaluation} step in \cref{fig:betazero-alg}.
+
+\begin{figure}[t!]
+    \centering
+    \includegraphics[width=\linewidth]{diagrams/betazero/mcts-betazero.pdf}
+    \caption{The four stages of BetaZero's belief-state MCTS with neural network surrogates.}
+    \label{fig:mcts-betazero}
+\end{figure}
+
+\subsection{Policy Vector as \texorpdfstring{$Q$}{Q}-Weighted Counts}
+When planning in belief space, expensive belief updates occur in the tree search and thus may limit the MCTS budget.
+Therefore, the visit counts may not converge towards an optimal strategy as the budget may be spent on exploration.
+\textcite{danihelka2022policy} and \textcite{czech2021improving} suggest using knowledge of the $Q$-values from search in MCTS action selection.
+Using only tree information, we incorporate $Q$-values and train against the policy:
+\begin{equation}
+    \bpi_t(b_t, a) \propto \Biggl(\biggl(\frac{\exp Q(b_t, a)}{\sum_{a'} \exp Q(b_t, a')}\biggr)^{z_q}\biggl(\frac{N(b_t,a)}{\sum_{a'} N(b_t,a')}\biggr)^{z_n}\Biggr)^{1/\tau}\label{eq:policy_q_weight}
+\end{equation}
+which is then normalized to get a valid probability distribution.
+\Cref{eq:policy_q_weight} simply weights the visit counts by the softmax $Q$-value distribution with parameters $z_q \in [0,1]$ and $z_n \in [0,1]$ defining the influence of the values and the visit counts, respectively.
+If $z_q=z_n=1$, then the influence is equal and if $z_q=z_n=0$, then the policy becomes uniform.
+Once the tree search finishes, the root node action is selected from $a \sim \bpi_t(b_t, \cdot)$ and returns the argmax when the temperature $\tau \to 0$.
+
+\Cref{fig:q-weighting} shows an illustrative example of when collecting policy data based purely on visit counts (left) or $Q$-values (middle) would perform worse than weighting the visit counts based on $Q$-values (right).
+This is useful when using a small MCTS budget with high exploration.
+Using both the visit counts \textit{and} $Q$-values, we incorporate both what the tree search \textit{focused on} and the \textit{values it found}.
+Quantitative analysis is provided in \cref{sec:betazero_ablation}.
+
+\begin{figure}[t!]
+    \centering
+    \includegraphics[width=\linewidth]{diagrams/betazero/q-weighting-diagram.pdf}
+    \caption{Root node imitation policies: Visit counts, $Q$-values, and $Q$-weighted visit counts.}
+    \label{fig:q-weighting}
+\end{figure}
+
+\subsection{BetaZero Policy Improvement Loss Function}
+Using the latest collected data, the \textit{policy improvement} step retrains the policy network head using the cross-entropy loss $\mathcal{L}_{P_\theta}(\bpi_t, \vect{p}_t) = -\bpi_t^\top \log \vect{p}_t$.
+The value network head is simultaneously trained to fit the returns $g_t$ using mean-squared error (MSE) or mean-absolute error (MAE) to predict the value of the belief $b_t$.
+Note that we use either MSE or MAE value losses $\mathcal{L}_{V_\theta}$ for different problems depending on the characteristics of the return distribution.
+In sparse reward problems, MAE is a better choice as the distribution is closer to Laplacian \cite{hodson2022root}.
+When the reward is distributed closer to Gaussian, then MSE is more suitable \cite{chai2014root}.
+The final loss combines the value and policy losses with $L_2$-regularization:
+\begin{equation}
+    \mathcal{L}_{\beta_0} = \mathcal{L}_{V_\theta}(g_t, v_t) + \mathcal{L}_{P_\theta}(\bpi_t, \vect{p}_t) + \lambda\norm{\theta}^2
+\end{equation}
+
+\subsection{Prioritized Action Widening}
+Explicitly planning in belief space handles state uncertainty but may incur computational overhead when performing belief updates; therefore, we avoid trying all actions at every belief node.
+We apply \textit{action progressive widening} \cite{couetoux2011continuous} to limit action expansion, which has been used in the context of continuous and large discrete action spaces \cite{moerland2018a0c,yee2016monte}. 
+\textcite{browne2012survey} found action progressive widening to be effective in cases where favorable actions were tried first and \textcite{mern2021improved} show that prioritizing actions can improve MCTS performance in large discrete action spaces. 
+Therefore, BetaZero selects actions through progressive widening and uses information from the learned policy network to sample new actions $a \sim P_\theta(\tilde{b}, \cdot)$, as seen on line \ref*{line:sample_action} in \cref{alg:betazero-action-pw}.
+This way, we first focus the expansion on \textit{promising actions}, then make the final selection based on PUCT.\footnote{PUCT uses normalized $Q$-values from $0$ to $1$ ($\widebar{Q}$) so $c$ can be problem independent \cite{schrittwieser2020mastering}.}
+In \cref{sec:betazero_experiments}, we perform an ablation to measure the effect of using the policy $P_\theta$ to prioritize actions when widening the tree compared to uniform sampling of the action space.
+
+\begin{figure}[ht]
+    \centering
+    \input{algorithms/betazero/action_selection_betazero}
+    \vspace*{-7mm}
+\end{figure}
+
+\subsection{Stochastic Belief-State Transitions}
+A challenge with~partially observable domains is handling non-deterministic belief-state transitions in the tree search.
+The belief-state transition function $T_b$ consists of several stochastic components, and the belief is continuous (being a probability distribution over states).
+To address this, we use progressive widening from \textcite{couetoux2011continuous} (\cref{alg:betazero-state-pw}).
+Other methods for state expansion, like \textit{state abstraction refinement} from \textcite{sokota2021monte}, rely on problem-specific distance metrics between states to perform a nearest neighbor search.
+Progressive widening avoids problem-specific heuristics by using information only available in the search tree to provide artificially limited belief-state branching.
+Limited branching is important as the belief updates can be computationally expensive, thus limiting the MCTS search budget in practice.
+
+\begin{figure}[ht]
+    \vspace*{-3mm}
+    \centering
+    \input{algorithms/betazero/state_expansion_betazero}
+    \vspace*{-4mm}
+\end{figure}
+
+\subsection{Parametric Belief Representation}
+Inputting state histories into the network is common in the literature, in both the context of MDPs \cite{silver2018general} and POMDPs \cite{cai2022closing}.
+Using only state information does not generalize to complex POMDPs (seen later in \cref{fig:ablations}); therefore, a representation of the belief is required.
+To model beliefs, we focus on the non-parametric \textit{particle set} that can represent a broad range of distributions \cite{thrun2005probabilistic}, and \textcite{lim2023optimality} show that optimality guarantees exist in finite-sample particle-based POMDP approximations.
+Despite choosing to study particle-based beliefs, our work generalizes well to problems with parametric beliefs.
+
+Although a particle belief is non-parametric, approximating the belief as summary statistics (e.g., mean and std) may capture enough information for value and policy estimation \cite{coquelin2008particle}.
+Approximating the particle set parametrically is easy to implement and computationally inexpensive.
+We show that the approximation works well across various problems and, unsurprisingly, using only the mean state is inadequate (see ablation \cref{fig:ablations}).
+We represent the particle set $b$ parametrically as $\phi(b) = [\mu(b), \sigma(b)]$. 
+BetaZero plans over the full belief $b$ in the tree and only uses the belief representation $\tilde{b} = \phi(b)$ for network evaluations.
+
+We do not depend on the \textit{exact} way in which the belief is represented, so long as it captures state uncertainty.
+\textcite{coquelin2008particle} consider how to represent a particle filter belief as a finite set of features for policy gradient and suggest a mean and covariance approximation, but only consider the class of policies depending on a single feature of the mean.
+Their work suggests that other features, such as entropy, could also be used.
+Other algorithms (e.g., FORBES from \textcite{chen2022flow}) could instead be used to learn this belief representation.
+Another example approach could use principle component analysis (PCA) to learn lower-dimensional features for belief representation \cite{roy2005finding}.
+Moreover, the $\mathcal{I}$-VAE latent representation from \cref{ch:ivae} could also be used as the belief representation.
+
+\Cref{fig:betazero-network} illustrates the neural network design used by BetaZero, where an input belief $b$ is converted to its belief representation $\tilde{b} = \phi(b)$ and passed into the network.
+The network predicts the probability distribution over all discrete actions and the estimated future value.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[trim=0 18 0 14, clip, width=0.9\linewidth]{diagrams/betazero/betazero-network.pdf}
+    \caption{BetaZero neural network design.}
+    \label{fig:betazero-network}
+\end{figure}
+
+\subsection{Bootstrapping Initial \texorpdfstring{$Q$}{Q}-Values}
+The value network $V_\theta$ is used during the \textit{simulation} step to replace rollouts with a network lookup (line \ref*{line:mcts_lookup}, alg. \ref{alg:betazero-mcts}).
+When a new state-action node is added to the tree, initial $Q$-values can also use the value network to bootstrap the estimate:
+\begin{equation}
+    Q_0(b, a) \defeq R_b(b, a) + \gamma V_\theta(\phi(b')) \ \  \text{where} \ \  b' \sim T_b(\cdot \mid b, a)
+\end{equation}
+Bootstrapping occurs in \cref{alg:betazero-action-pw} (line \ref*{line:init_q}) and incurs an additional belief update through the belief-state transition $T_b$ and may be opted for only during online execution.
+The bootstrapped estimate is more robust \cite{kumar2019stabilizing} and can be useful to initialize online search.\footnote{Note that bootstrapping is also used in the model-free \textit{MuZero} algorithm \cite{schrittwieser2020mastering}.}
+
+
+\subsection{Full BetaZero Algorithm}
+
+\Cref{alg:betazero,alg:collect_data,alg:mcts-top-lvl,alg:betazero-mcts} detail the full BetaZero policy iteration algorithm that iterates between \textit{policy evaluation} and \textit{policy improvement} for a total of $n_\text{iterations}$.
+The offline policy evaluation stage, or data collection process (\cref{alg:collect_data}), runs $n_\text{data}$ parallel MCTS simulations over the original POMDP and collects a dataset $\mathcal{D}$ of beliefs $b_t$, policy vectors $\bpi_t$, and returns $g_t$ (computed after each episode terminates).
+The top-level $Q$-weighted MCTS algorithm is shown in \cref{alg:mcts-top-lvl}, which iteratively runs MCTS simulations (\cref{alg:betazero-mcts}) for $n_\text{online}$ iterations to a specified depth $d$.
+The final root node action selection policy follows the $Q$-weighted visit counts from \cref{eq:policy_q_weight}.
+The descriptions of parameters $\psi$ used in offline training and online tree search are listed in \cref{tab:ld_params,tab:rs_params,tab:minex_params}.
+
+\begin{figure}[!p]
+    \centering
+    \begin{minipage}{\textwidth}
+        \input{algorithms/betazero/betazero}
+    \end{minipage}
+\end{figure}
+
+\begin{figure}[!p]
+    \centering
+    \begin{minipage}{\textwidth}
+        \input{algorithms/betazero/collect-data}
+    \end{minipage}
+\end{figure}
+
+\begin{figure}[!p]
+    \centering
+    \begin{minipage}{\textwidth}
+        \input{algorithms/betazero/mcts-outer}
+    \end{minipage}
+\end{figure}
+
+\begin{figure}[ht]
+    \centering
+    \begin{minipage}{\textwidth}
+        \input{algorithms/betazero/mcts}
+    \end{minipage}
+\end{figure}
+
+\subsection{Complexity Analysis}
+The runtime complexity of MCTS is $M = \mathcal{O}(ndm)$, where $n$ is the number of MCTS iterations (denoted $n_\text{online}$ in \cref{alg:betazero-mcts}), $d$ is the search depth, and the belief update is over $m$ particles at each belief-state node.
+The full complexity of BetaZero is $\mathcal{O}(pmTM/c)$ for $p$ parallel runs (denoted $n_\text{data}$ in \cref{alg:collect_data}), an episode horizon of $T$ (each step updating the belief over $m$ particles), the MCTS complexity of $M$, and the number of CPU cores $c$.
+
+The memory complexity for MCTS is $E = \mathcal{O}(k^d)$ for $k = |A(b)||B(b,a)|$ where 
+$|B(b,a)|$ is the number of belief-action nodes and $|A(b)|$ is the number of children, which depend on progressive widening parameters.
+The memory complexity for BetaZero is $\mathcal{O}(TPE|\theta|)$ for the collected data sizes of the belief and returns $T$ (same as the horizon), the policy vector size of $P = |\mathcal{A}|$ (i.e., action space size), the MCTS memory complexity of $E$, and the network size of $|\theta|$.
+Compared to standard MCTS applications to belief-state MDPs, BetaZero requires additional memory for data collection and neural network storage.
+
+
+\section{Related Work}
+Algorithms to solve high-dimensional, \textit{fully observable} MDPs have been proposed that learn approximations to replace problem-specific heuristics.
+Notably, \textcite{silver2018general} introduced the \textit{AlphaZero} algorithm for large, deterministic MDPs and showed considerable success in games such as Go, chess, shogi, and Atari \cite{silver2018general, schrittwieser2020mastering}.
+The success is attributed to the combination of online MCTS and a neural network that approximates the optimal value function and the offline policy.
+Extensions of AlphaZero and the model-free variant \textit{MuZero} \cite{schrittwieser2020mastering} have already addressed several challenges when applying to broad classes of MDPs.
+For large or continuous action spaces, \textcite{hubert2021learning} introduced a policy improvement algorithm called \textit{Sampled MuZero} that samples an action set of an \textit{a priori} fixed size every time a node is expanded.
+\textcite{antonoglou2021planning} introduced \textit{Stochastic MuZero} that extends MuZero to games with stochastic transitions but assumes a finite set of possible next states so that each transition can be associated with a chance outcome.
+Applying these algorithms to large or continuous spaces with partial observability remains challenging.
+
+To handle partial observability in stochastic games, \textcite{ozair2021vector} combine VQ-VAEs with MuZero to encode future discrete observations into latent variables.
+Other approaches handle partial observability by inputting action-observation histories directly into the network \cite{kimura2020development, vinyals2019grandmaster}.
+Similarly, \textcite{igl2018deep} introduce a method to learn a belief representation within the network when the agent is only given access to histories.
+Their work focuses on the \textit{reinforcement learning} (RL) domain, and they show that a belief distribution can be represented as a latent state in the learned model.
+The FORBES algorithm \cite{chen2022flow} builds a normalizing flow-based belief and learns a policy through an actor-critic RL algorithm.
+Methods to learn the belief are necessary when a prior belief model is not available.
+When such models \textit{do} exist, as is the case with many POMDPs that we study, using the models can be valuable for long-term planning.
+Finally, \textcite{hoel2019combining} apply AlphaGo Zero \cite{silver2017mastering} to an autonomous driving POMDP using the most-likely state as the network input but overlook significant uncertainty information in the belief.
+
+
+\subsection{Online POMDP Planning}
+\textcite{sunberg2018online} introduced the \textit{POMCPOW} planning algorithm that iteratively builds a particle set belief within the tree, designed for fully continuous spaces.
+In practice, POMCPOW relies on heuristics for value function estimation and action selection (e.g., work from \textcite{mern2023intelligent}).
+\textcite{wu2021adaptive} introduced \textit{AdaOPS} that adaptively approximates the belief through particle filtering and maintains value function bounds that are initialized with heuristics (e.g., solving the MDP or using expert policies).
+The major limitation of existing solvers is the reliance on heuristics to make long-horizon POMDPs tractable, which may not scale to high-dimensional problems.
+\textcite{cai2022closing} proposed \textit{LeTS-Drive} applied to autonomous driving that combines planning and learning similar to BetaZero, and uses HyP-DESPOT with PUCT exploration \cite{cai2021hyp} as the planning algorithm, instead of MCTS.
+It uses a state-history window as input to the network, which may not adequately capture the state uncertainty.
+LeTS-Drive expands on all actions during planning, which we show may lead to suboptimal planning under limited search budgets (shown in \cref{fig:apw_sensitivity_ld10,fig:apw_sensitivity_rs20}).
+To handle long-horizon POMDPs, \textcite{mazzi2023learning} propose learning logic-based rules as policy guidance in POMCP, yet domain-specific knowledge is required to define the set of features for the rules, which may not be easily generalized to complex POMDPs we study in this work.
+Therefore, we identified the need for a general POMDP planning algorithm that does not rely on problem-specific heuristics for good performance.
+
+\begin{table}[b!]
+    \centering
+    \begin{threeparttable}
+        \begin{tabular}{@{}lrrr@{}}
+            \toprule
+                                                   &  $|\mathcal{S}|$              &  $|\mathcal{A}|$  &  $|\mathcal{O}|$  \\
+            \midrule
+            $\textsc{LightDark}(5 \text{ and } 10)$  &  $|\mathbb{R}|$               &  $3$              &  $|\mathbb{R}|$  \\
+            $\textsc{RockSample}(15,15)$             &  $7{,}372{,}800$              &  $20$             &  $3$  \\
+            $\textsc{RockSample}(20,20)$             &  $419{,}430{,}400$            &  $25$             &  $3$  \\
+            \textsc{Mineral Exploration}             &  $|\mathbb{R}^{32\times32}|$  &  $38$             &  $|\mathbb{R}_{\ge 0}|$  \\
+            \bottomrule
+        \end{tabular}
+    \end{threeparttable}
+    \caption{POMDP state, action, and observation space dimensions.}\label{tab:spaces}
+    \vspace*{-3mm}
+\end{table}
+
+\section{Experiments}\label{sec:betazero_experiments}
+
+Three benchmark problems were chosen to evaluate the performance of BetaZero against several baselines: AdaOPS \cite{wu2021adaptive}, POMCPOW \cite{sunberg2018online}, DESPOT \cite{ye2017despot}, and LeTS-Drive \cite{cai2022closing}.
+\Cref{tab:spaces} details the POMDP space sizes and this section describes the experimental design.
+
+\subsection{POMDP Environments}
+
+In \textsc{LightDark$(y)$} from \textcite{platt2010belief}, the goal of the agent is to execute a \texttt{stop} action at the origin while receiving noisy observations of its true location.
+The noise is minimized in the \textit{light} region ${y=5}$.
+We also benchmark against a more challenging version with the light region at ${y=10}$ from \textcite{sunberg2018online}, and restrict the agent to only three actions: move \texttt{up} or \texttt{down} by one, or \texttt{stop}.
+The modified problem requires information gathering over longer horizons.
+Next is the \textsc{RockSample$(n,k)$} POMDP \cite{smith2004heuristic}, which is a scalable information gathering problem where an agent moves in an $n \times n$ grid to observe $k$ rocks with an objective to sample only the \textit{good} rocks.
+Well-established POMDP benchmarks go up to $n=15$ and $k=15$; we also test a harder version with $n=20$ and $k=20$ to show the scalability of BetaZero, noting that this case has been evaluated in the multi-agent setting \cite{cai2021hyp}.
+Finally, in the real-world \textsc{Mineral Exploration} problem \cite{mern2023intelligent}, the agent drills over a $32\times32$ region to determine if a subsurface ore body should be mined or abandoned and the continuous ore quality is observed at the drill locations to build a belief.
+Drilling incurs a penalty, and if chosen to mine, then the agent is rewarded or penalized  based on an economic threshold of the extracted ore mass.
+The problem is challenging due to reasoning over limited observations with sparse rewards.
+In the following sections, we provide additional details regarding each environment.
+
+
+\begin{figure}[b!]
+    \centering
+    \includegraphics[width=0.75\linewidth]{figures/betazero/results/lightdark_traj.pdf}
+    \caption{$\textsc{LightDark}(10)$ trajectories from $50$ episodes.}
+    \label{fig:lightdark_trajectories}
+    \vspace*{-3mm}
+\end{figure}
+
+
+\paragraph{Light dark.}
+The \textsc{LightDark}$(y)$ POMDP is a one-dimensional localization problem \cite{platt2010belief}.
+The objective is for the agent to execute the \texttt{stop} action at the goal, which is at $\pm 1$ of the origin.
+The agent is awarded $100$ for stopping at the goal and $-100$ for stopping anywhere else, using a discount of $\gamma = 0.9$.
+The agent receives noisy observations of their position, where the noise is minimized in the \textit{light} region defined by $y$.
+In the $\textsc{LightDark}(5)$ problem used by \textcite{wu2021adaptive}, the noise is a zero-mean Gaussian with standard deviation of $|y - 5|/\sqrt{2} + 10^{-2}$.
+For the $\textsc{LightDark}(10)$ problem used by \textcite{sunberg2018online}, the noise is a zero-mean Gaussian with standard deviation of $|y - 10| + 10^{-4}$.
+In both problems, we use a restricted action space of $\mathcal{A} = \{-1, 0, 1\}$ where $0$ is the \texttt{stop} action.
+The expected behavior of the optimal policy is to first localize in the light region, then travel down to the goal.
+The BetaZero policy exhibits this behavior which can be seen in \cref{fig:lightdark_trajectories}, where BetaZero (dark blue) learned to first localize in the light region at $y=10$ before heading to the goal (at the origin, where circles indicate the final location).
+
+The approximately optimal solution to the light dark problems uses \textit{local approximation value iteration} (LAVI) \cite{dmubook} over the discretized belief-state space (i.e., mean and std).
+The belief mean was discretized between the range $[-12, 12]$, and the belief std was discretized between the range $[0, 5]$, each of length $100$.
+The LAVI solver used $100$ generative samples per belief state and ran for $100$ value iterations with a Bellman residual of $\num{1e-3}$.
+
+
+\paragraph{Rock sample.}
+In the $\textsc{RockSample}(n,k)$ POMDP introduced by \textcite{smith2004heuristic}, an agent has full observability of its position on an $n \times n$ grid but has to sense the $k$ rocks to determine if they are \textit{good} or \textit{bad}.
+The agent knows \textit{a priori} the true locations of the rocks (i.e., the rock locations $\mathbf{x}_\text{rock}$ are a part of the problem, not the state).
+The observation noise is a function of the distance to the rock:
+\begin{equation}
+   \frac{1}{2}\left(1 + \exp\left(-\frac{\lVert \mathbf{x}_\text{rock} - \mathbf{x}_\text{agent} \rVert_2 \log(2)}{c}\right)\right)
+\end{equation}
+where $c=20$ is the sensor efficiency.
+The agent can move in the four cardinal directions, sense the $k$ rocks, or take the action to \texttt{sample} a rock when it is located under the agent.
+The agent receives a reward of $10$ for sampling a \textit{good} rock and a penalty of $-10$ for sampling a \textit{bad} rock.
+The terminal state is the exit at the right edge of the map, where the agent gets a reward of $10$ for exiting.
+
+
+\paragraph{Mineral exploration.}
+The \textsc{Mineral Exploration} POMDP introduced by \textcite{mern2023intelligent} is an information gathering problem with the goal of deciding whether a subsurface ore body is economical to mine or should be abandoned (calibrated so that $50\%$ of cases are economical).
+The agent can drill every fifth cell of a $32 \times 32$ plot of land to determine the ore quality at that location.
+Therefore, the action space consists of the $36$ drill locations and the final decisions to either \texttt{mine} or \texttt{abandon}.
+The agent receives a small cost for each \texttt{drill} action, a reward proportional to the extracted ore if it chooses to \texttt{mine} (which is negative if uneconomical), and a reward of zero if it chooses to \texttt{abandon}:
+\begin{equation}
+R(s,a) = \begin{cases}
+    -c_\text{drill} & \text{if } a=\texttt{drill}\\
+    \displaystyle\sum\mathds{1}\{s_\text{ore} \ge h_\text{massive}\} - c_\text{extract} & \text{if } a=\texttt{mine}\\
+    0 & \text{if } a=\texttt{abandon}
+\end{cases}\label{eq:minex_reward}
+\end{equation}
+where $c_\text{drill}=0.1$, $h_\text{massive}=0.7$, and $c_\text{extract}=71$.
+The term $\sum\mathds{1}(s_\text{ore} \ge h_\text{massive})$ indicates the cells that have an ore quality value above some massive ore threshold $h_\text{massive}$ (which are deemed valuable).
+\Cref{fig:minex_policy} and \cref{fig:minex_2d} show an example of four steps of the mineral exploration POMDP.
+
+
+\subsection{Baseline Heuristics}
+
+Experiment parameters for each problem can be seen in \cref{tab:ld_params,tab:rs_params,tab:minex_params} under the ``online'' column.
+For the baseline algorithms, the heuristics follow \textcite{wu2021adaptive}.
+Problems that failed to run due to memory limits followed suggestions from \textcite{adaops2021review} to first use the MDP solution and then use a fixed upper bound of $r_\text{correct}=100$ for the light dark problems and the following for the rock sample problems:
+\begin{equation}
+    V_\text{max} =  r_\text{exit} + \sum_{t=1+n-k}^{2k-n} \gamma^{t-1}r_\text{good}
+\end{equation}
+where $r_\text{good} = r_\text{exit} = 10$ and the sum computes an optimistic value assuming the rocks are directly lined between the agent and the goal and assuming $n \ge k$ for simplicity.
+
+For problems not studied by \textcite{wu2021adaptive}, we use the same heuristics as their easier counterpart (i.e., $\textsc{LightDark}(10)$ uses $\textsc{LightDark}(5)$ heuristics and $\textsc{RockSample}(20,20)$ uses $\textsc{RockSample}(15,15)$ heuristics).
+For mineral exploration, the baselines used the following heuristics.
+POMCPOW used a value estimator of $\max(0, R(s, a=\text{mine}))$ and when using ``no heuristic'' used a random rollout policy to estimate the value.
+Both AdaOPS and DESPOT used a lower bound computed as the returns if all locations were fully drilled, then made the decision to \texttt{abandon}:
+\begin{equation}
+    V_\text{min} = -\sum_{t=1}^{T-1} \gamma^{t-1}c_\text{drill}
+\end{equation}
+The upper bound comes from an oracle $\pi_\text{truth}$ taking the correct final action without drilling, computed over $10{,}000$ states. Note that there is no state transition in this problem:
+\begin{align}
+    V_\text{max} &= \operatorname*{\mathbb{E}}_{s \in \mathcal{S}} \bigg[ \max\Big(0, R\big(s, \pi_\text{truth}(s)\big)\Big) \bigg] \\
+                 &\approx \frac{1}{n}\sum_{i=1}^n \max\Big(0, R\big(s^{(i)}, \pi_\text{truth}(s)\big)\Big)
+\end{align}
+
+
+\begin{minipage}{\linewidth}
+\begin{center}
+    \begin{minipage}{0.65\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_appendix1.pdf}
+        }
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.3\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_belief1.pdf}
+        }
+    \end{minipage}
+    % 
+    \begin{minipage}{0.65\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_appendix2.pdf}
+        }
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.3\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_belief2.pdf}
+        }
+    \end{minipage}
+    % 
+    \begin{minipage}{0.65\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_appendix3.pdf}
+        }
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.3\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_belief3.pdf}
+        }
+    \end{minipage}
+    % 
+    \begin{minipage}{0.65\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_appendix4.pdf}
+        }
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.3\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{figures/betazero/appendix/minex_belief4.pdf}
+        }
+    \end{minipage}
+
+    \captionsetup{hypcap=false} % suppress warning
+    \begin{minipage}[t]{0.65\textwidth}
+        \captionof{figure}{The BetaZero policy shown over the mean belief.}
+        \label{fig:minex_policy}
+    \end{minipage}
+    \hfill
+    \captionsetup{hypcap=false} % suppress warning
+    \begin{minipage}[t]{0.3\textwidth}
+        \captionof{figure}{Uncertainty.}
+        \label{fig:minex_2d}
+    \end{minipage}
+\end{center}
+\end{minipage}
+
+Visualized in \cref{fig:minex_policy}, the BetaZero policy is shown over the belief mean for four steps of the \textsc{Mineral Exploration} POMDP.
+BetaZero first prioritizes the edges of the belief mean, corresponding to the belief uncertainty (shown in the \cref{fig:minex_2d} plots), then explores the outer regions of the subsurface; ultimately gathering information from actions with high mean and standard deviation, matching heuristics from \textcite{mern2023intelligent}.
+At the initial step, abandoning and mining have near-equal probability (bottom left bar graphs in \cref{fig:minex_policy}) but by the fourth action, abandoning is much more likely.
+\Cref{fig:minex_2d} visualizes the selected drill actions over the belief uncertainty, showing that uncertainty collapses after drilling.
+
+
+\subsection{Particle Filter for Belief Updating}
+Both BetaZero and the baselines update their belief with a bootstrap particle filter using a low-variance resampler \cite{gordon1993novel}, with $n_\text{particles} \in [500,1000,1000]$ for the light dark, rock sample, and mineral exploration problems, respectively.
+The particle filter follows an update procedure of first reweighting then resampling.
+In mineral exploration, the observations are noiseless which could quickly result in particle depletion.
+Therefore, approximate Bayesian computation (ABC) \cite{csillery2010approximate} is used to reweight each particle using a Gaussian distribution centered at the observation with a standard deviation of $\sigma_\text{abc} = 0.1$.
+
+The belief representation takes the mean and standard deviation across the $n_\text{particles}$.
+In the light dark problems, this is computed across the $500$ sampled $y$-state values that make up the belief.
+The initial $y$-value state distribution (i.e., the initial belief) follows a Gaussian distribution, and thus the parametric representation is a good approximation of the belief.
+
+For the rock sample problem, the belief is represented as the mean and standard deviation of the \textit{good} rocks from the $1000$ sampled states (appending the true position as it is deterministic).
+The rock qualities are sampled uniformly in $\{0,1\}$ indicating if they are \textit{good}, which makes the problem non-Gaussian, but the parametric belief approximation can model a uniform distribution by placing the mean at the center of the uniform range and stretching the variance to match the uniform.
+
+Lastly, the mineral exploration problem flattens the $1000$ subsurface $32\times32$ maps, each of which has associated per-pixel ore quality between $[0,1]$, into two images: a mean and standard deviation image of the ore quality that is stacked and used as input to a convolutional neural network (CNN).
+The initial state distribution for the massive ore quantity closely follows a Gaussian, making the parametric belief approximation well suited.
+
+For problems where Gaussian approximations are not well-suited to capture the belief, the parameters of other distributions could be used as a belief representation or the particles themselves could be input into a network---first passing through an order-invariant layer \cite{igl2018deep}.
+Scaling to larger observation spaces will not be an issue as BetaZero plans over belief states instead of observations.
+
+\subsection{Network Architectures}
+
+
+\begin{figure}[ht!]
+    \centering
+    \hfill
+    \begin{minipage}{0.22\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{diagrams/betazero/nn-lightdark.pdf}
+        }
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.28\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{diagrams/betazero/nn-rocksample.pdf}
+        }
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.26\textwidth}
+        \resizebox{\textwidth}{!}{%
+            \includegraphics{diagrams/betazero/nn-minex.pdf}
+        }
+    \end{minipage}
+    \hspace*{4mm}
+
+    \begin{minipage}[t]{0.32\textwidth}
+        \caption{Light dark NN.}
+        \label{fig:nn_lightdark}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.32\textwidth}
+        \caption{Rock sample NN.}
+        \label{fig:nn_rocksample}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[t]{0.32\textwidth}
+        \caption{MinEx. CNN.}
+        \label{fig:nn_minex}
+    \end{minipage}
+\end{figure}
+
+
+\Cref{fig:nn_lightdark,fig:nn_rocksample,fig:nn_minex} specify the neural network architectures for the three problem domains.
+The networks were designed to be simple so that future work could focus on incorporating more complicated architectures such as residual networks \cite{vinyals2019grandmaster,sherstinsky2020fundamentals}.
+Mineral exploration does not normalize the inputs and is the only problem where the input is treated as an image; thus, we use a CNN.
+Training occurs on normalized returns and an output denormalization layer is added to the value head to ensure proper magnitude of the predicted values.
+
+
+\subsection{Return Scaling for Output Normalization}
+
+For general POMDPs, the return can be an unbounded real-value and not conveniently in $[0,1]$ or $[-1,1]$, as is often the case with two-player games. 
+\textcite{schrittwieser2020mastering} use a categorical representation of the value split into a discrete support to make learning more robust \cite{schrittwieser2020intuition}.
+We instead simply normalize the target before training as:
+\begin{equation}
+    \bar{g}_t = \frac{g_t - \mathbb{E}[G_\text{train}]}{\sqrt{\Var[G_\text{train}]}}
+\end{equation}
+where $G_\text{train}$ is the set of returns used during training; keeping running statistics of all training data.
+Intuitively, this ensures that the target values have zero mean and unit variance which is known to stabilize training \cite{lecun2002efficient}.
+After training, a denormalization layer is added to the normalized output $\bar{v}$ of the value network as:
+\begin{equation}
+    v_t = \bar{v} \sqrt{\Var[G_\text{train}]} + \mathbb{E}[G_\text{train}]
+\end{equation}
+to properly scale value predictions when the network is evaluated.
+This scaling is done entirely internal to the network as shown in \cref{fig:nn_lightdark,fig:nn_rocksample,fig:nn_minex}.
+
+
+\begin{table*}[b!]
+    \centering
+    \begin{adjustbox}{max width=\textwidth}
+    \begin{threeparttable}
+        \begin{footnotesize}
+        \begin{tabular}{@{}clrrrrm{9cm}@{}}
+            \arrayrulecolor{black} % revert
+            \toprule
+             & \multirow{2}{*}{Parameter\tnote{*}}  &  \multicolumn{2}{c}{$\text{LightDark}(5)$}  &  \multicolumn{2}{c}{$\text{LightDark}(10)$}  &  \multirow{2}{*}{Description} \\
+            \arrayrulecolor{lightgray}
+            \cmidrule{3-6}
+            \arrayrulecolor{black} % revert
+                    &  & Offline & Online & Offline & Online & \\
+            \midrule
+            \multirow{3}{*}{\makecell{BetaZero policy\\iteration parameters}} & $n_\text{iterations}$ & $\num{30}$ & --- & $\num{30}$ & --- & Number of offline BetaZero policy iterations. \\
+             & $n_\text{data}$ & $\num{500}$ & --- & $\num{500}$ & --- & Number of parallel MCTS data gen. episodes per policy iteration. \\
+             & bootstrap $Q_0$ & \texttt{false} & \texttt{false} & \texttt{false} & \texttt{false} & Use bootstrap estimate for initial $Q$-value in MCTS? \\
+            \arrayrulecolor{lightgray}
+            \midrule
+            \multirow{3}{*}{\shortstack{Neural network\\parameters}} & $n_\text{epochs}$ & $\num{50}$ & --- & $\num{50}$ & --- & Number of training epochs. \\
+             & $\alpha$ & $\num{1e-4}$ & --- & $\num{1e-4}$ & --- & Learning rate. \\
+             & $\lambda$ & $\num{1e-5}$ & --- & $\num{1e-5}$ & --- & $L_2$-regularization parameter. \\
+             \midrule
+             \multirow{10}{*}{\shortstack{MCTS\\parameters}} & $n_\text{online}$ & $\num{100}$ & $\num{1300}$ & $\num{100}$ & $\num{1000}$ & Number of tree search iterations of MCTS.\\
+              & $c$ & $\num{1}$ & $\num{1}$ & $\num{1}$ & $\num{1}$ & PUCT exploration constant. \\
+              & $k_a$ & $\num{2.0}$ & $\num{2.0}$ & $\num{2.0}$ & $\num{2.0}$ & Multiplicative action progressive widening value.\\
+              & $\alpha_a$ & $\num{0.25}$ & $\num{0.25}$ & $\num{0.25}$ & $\num{0.25}$ & Exponential action progressive widening value.\\
+              & $k_b$ & $\num{2.0}$ & $\num{2.0}$ & $\num{2.0}$ & $\num{2.0}$ & Multiplicative belief-state progressive widening value.\\
+              & $\alpha_b$ & $\num{0.1}$ & $\num{0.1}$ & $\num{0.1}$ & $\num{0.1}$ & Exponential belief-state progressive widening value.\\
+              & $d$ & $\num{10}$ & $\num{10}$ & $\num{10}$ & $\num{10}$ & Maximum tree depth. \\
+              & $\tau$ & $\num{0}$ & $\num{0}$ & $\num{0}$ & $\num{0}$ & Exploration temperature for final root node action selection. \\
+              & $z_q$ & $\num{1}$ & $\num{1}$ & $\num{1}$ & $\num{1}$ & Influence of $Q$-values in final criteria. \\
+              & $z_n$ & $\num{1}$ & $\num{1}$ & $\num{1}$ & $\num{1}$ & Influence of visit counts in final criteria. \\
+            \arrayrulecolor{black} % revert
+            \bottomrule
+        \end{tabular}
+        \begin{tablenotes}
+            \item[*] {Entries with ``---'' denote non-applicability and ``$\cdot$'' denotes they are disabled.}
+        \end{tablenotes}
+        \end{footnotesize}
+    \end{threeparttable}
+    \end{adjustbox}
+    \caption{\textit{BetaZero} parameters for the $\textsc{LightDark}$ problems.}\label{tab:ld_params}
+\end{table*}
+
+
+\begin{table*}[t!]
+    \centering
+    \begin{adjustbox}{max width=\textwidth}
+    \begin{threeparttable}
+        \begin{footnotesize}
+        \begin{tabular}{@{}clrrrrm{9cm}@{}}
+            \arrayrulecolor{black} % revert
+            \toprule
+             & \multirow{2}{*}{Parameter}  &  \multicolumn{2}{c}{$\text{RockSample}(15,15)$}  &  \multicolumn{2}{c}{$\text{RockSample}(20,20)$}  &  \multirow{2}{*}{Description} \\
+            \arrayrulecolor{lightgray}
+            \cmidrule{3-6}
+            \arrayrulecolor{black} % revert
+                    &  & Offline & Online & Offline & Online & \\
+            \midrule
+            \multirow{3}{*}{\shortstack{BetaZero policy\\iteration parameters}} & $n_\text{iterations}$ & $\num{50}$ & --- & $\num{50}$ & --- & Number of offline BetaZero policy iterations. \\
+             & $n_\text{data}$ & $\num{500}$ & --- & $\num{500}$ & --- & Number of parallel MCTS data gen. episodes per policy iteration. \\
+             & bootstrap $Q_0$ & \texttt{false} & \texttt{true} & \texttt{false} & \texttt{true} & Use bootstrap estimate for initial $Q$-value in MCTS? \\
+            \arrayrulecolor{lightgray}
+            \midrule
+            \multirow{3}{*}{\shortstack{Neural network\\parameters}} & $n_\text{epochs}$ & $\num{10}$ & --- & $\num{10}$ & --- & Number of training epochs. \\
+             & $\alpha$ & $\num{1e-3}$ & --- & $\num{1e-3}$ & --- & Learning rate. \\
+             & $\lambda$ & $\num{1e-5}$ & --- & $\num{1e-5}$ & --- & $L_2$-regularization parameter. \\
+             \midrule
+             \multirow{10}{*}{\shortstack{MCTS\\parameters}} & $n_\text{online}$ & $\num{100}$ & $\num{100}$ & $\num{100}$ & $\num{100}$ & Number of tree search iterations of MCTS.\\
+              & $c$ & $\num{50}$ & $\num{50}$ & $\num{50}$ & $\num{50}$ & PUCT exploration constant. \\
+              & $k_a$ & $\cdot$ & $\num{5.0}$ & $\cdot$ & $\cdot$ & Multiplicative action progressive widening value.\\
+              & $\alpha_a$ & $\cdot$ & $\num{0.9}$ & $\cdot$ & $\cdot$ & Exponential action progressive widening value.\\
+              & $k_b$ & $\cdot$ & $\num{1.0}$ & $\num{1.0}$ & $\num{1.0}$ & Multiplicative belief-state progressive widening value.\\
+              & $\alpha_b$ & $\cdot$ & $\num{0.0}$ & $\num{0.0}$ & $\num{0.0}$ & Exponential belief-state progressive widening value.\\
+              & $d$ & $\num{15}$ & $\num{15}$ & $\num{4}$ & $\num{4}$ & Maximum tree depth. \\
+              & $\tau$ & $\num{1.0}$ & $\num{0}$ & $\num{1.5}$ & $\num{0}$ & Exploration temperature for final root node action selection. \\
+              & $z_q$ & $\num{1}$ & $\num{0.4}$ & $\num{1}$ & $\num{0.5}$ & Influence of $Q$-values in final criteria. \\
+              & $z_n$ & $\num{1}$ & $\num{0.9}$ & $\num{1}$ & $\num{0.8}$ & Influence of visit counts in final criteria. \\
+            \arrayrulecolor{black} % revert
+            \bottomrule
+        \end{tabular}
+        \end{footnotesize}
+    \end{threeparttable}
+    \end{adjustbox}
+    \caption{\textit{BetaZero} parameters for the $\textsc{RockSample}$ problems.}\label{tab:rs_params}
+\end{table*}
+
+
+\begin{table*}[t!]
+    \centering
+    \begin{adjustbox}{max width=\textwidth}
+    \begin{threeparttable}
+        \begin{footnotesize}
+        \begin{tabular}{@{}clrrm{9cm}@{}}
+            \arrayrulecolor{black} % revert
+            \toprule
+             & Parameter  &  Offline & Online  &  Description \\
+            \midrule
+            \multirow{3}{*}{\shortstack{BetaZero policy\\iteration parameters}} & $n_\text{iterations}$ & $\num{20}$ & --- & Number of offline BetaZero policy iterations. \\
+             & $n_\text{data}$ & $\num{100}$ & --- & Number of parallel MCTS data gen. episodes per policy iteration. \\
+             & bootstrap $Q_0$ & \texttt{false} & \texttt{false} & Use bootstrap estimate for initial $Q$-value in MCTS? \\
+            \arrayrulecolor{lightgray}
+            \midrule
+            \multirow{3}{*}{\shortstack{Neural network\\parameters}} & $n_\text{epochs}$ & $\num{10}$ & --- & Number of training epochs. \\
+             & $\alpha$ & $\num{1e-6}$ & --- & Learning rate. \\
+             & $\lambda$ & $\num{1e-4}$ & --- & $L_2$-regularization parameter. \\
+             \midrule
+             \multirow{10}{*}{\shortstack{MCTS\\parameters}} & $n_\text{online}$ & $\num{50}$ & $\num{50}$ & Number of tree search iterations of MCTS.\\
+              & $c$ & $\num{57}$ & $\num{57}$ & PUCT exploration constant. \\
+              & $k_a$ & $\num{41.09}$ & $\num{41.09}$ & Multiplicative action progressive widening value.\\
+              & $\alpha_a$ & $\num{0.57}$ & $\num{0.57}$ & Exponential action progressive widening value.\\
+              & $k_b$ & $\num{37.13}$ & $\num{37.13}$ & Multiplicative belief-state progressive widening value.\\
+              & $\alpha_b$ & $\num{0.94}$ & $\num{0.94}$ & Exponential belief-state progressive widening value.\\
+              & $d$ & $\num{5}$ & $\num{5}$ & Maximum tree depth. \\
+              & $\tau$ & $\num{1.0}$ & $\num{0}$ & Exploration temperature for final root node action selection. \\
+              & $z_q$ & $\num{1}$ & $\num{1}$ & Influence of $Q$-values in final criteria. \\
+              & $z_n$ & $\num{1}$ & $\num{1}$ & Influence of visit counts in final criteria. \\
+            \arrayrulecolor{black} % revert
+            \bottomrule
+        \end{tabular}
+        \end{footnotesize}
+    \end{threeparttable}
+    \end{adjustbox}
+    \caption{\textit{BetaZero} parameters for the $\textsc{Mineral Exploration}$ problem.}\label{tab:minex_params}
+\end{table*}
+
+
+\subsection{Hyperparameters and Tuning}
+
+The hyperparameters used during offline training and online execution are described in \cref{tab:ld_params,tab:rs_params,tab:minex_params}.
+Offline training refers to the BetaZero policy iteration steps that collect parallel MCTS data (\textit{policy evaluation}) and then retrain the network (\textit{policy improvement}).
+Online execution refers to using the BetaZero policy after offline training to evaluate its performance through additional online tree search.
+The main difference between these two settings is the final criteria used to select the root node action in MCTS.
+During offline training of problems with large action spaces (e.g., rock sample and mineral exploration), sampling root node actions according to the $Q$-weighted visit counts with a temperature $\tau$ ensures exploration.
+To evaluate the performance online, root node action selection takes the maximizing action of the $Q$-weighted visit counts.
+During training, we also evaluate a holdout set that uses the $\argmax$ criteria to monitor the performance of the learned policy.
+
+
+The MCTS parameters for mineral exploration were tuned using Latin hypercube sampling based on the lower-confidence bound of the returns.
+During rock sample training, DPW was disabled to expand on all actions and transition to a single belief.
+Then for online execution, we tuned the DPW parameters as shown in \cref{fig:pw_sensitivity_ld10,fig:pw_sensitivity_rs20}.
+The problems train with a batch size of $1024$ over $80\%$ of $100{,}000$ samples from one round of data collection ($n_\text{buffer}=1)$ using $p_\text{dropout}$ of $0.2$, $0.5$, $0.7$, respectively.
+The neural network optimizer Adam \cite{kingma2014adam} was used in \textsc{LightDark}$(y)$, while RMSProp \cite{hinton2014rmsprop} was used in the others.
+A value function loss of MAE was used in mineral exploration; otherwise, MSE was used.
+
+
+\subsection{Compute Resources}
+
+BetaZero was designed to use a single GPU to train the network and parallelize MCTS evaluations across available CPUs.
+Evaluating the networks on the CPU is computationally inexpensive due to the size of the networks (shown in \cref{fig:nn_lightdark,fig:nn_rocksample,fig:nn_minex}).
+This design was chosen to enable future research without a computational bottleneck.
+For network training, a single NVIDIA A$100$ was used with $80$GB of memory on an Ubuntu 22.04 machine with $500$ GB of RAM.
+Parallel data collection processes were run on $50$ processes split evenly over two separate Ubuntu 22.04 machines: (1) with $40$ Intel Xeon $2.3$ GHz CPUs, and (2) with $56$ Intel Xeon $2.6$ GHz CPUs.
+\Cref{alg:collect_data} (line \ref*{line:parallel}) shows where CPU parallelization occurs.
+In practice, the MCTS data generation simulations are the bottleneck of the offline component of BetaZero and not the network training---thus, parallelization is useful.
+
+
+\subsection{Baseline Algorithms}\label{sec:betazero_baselines}
+We baseline BetaZero against several online POMDP algorithms: AdaOPS, POMCPOW, DESPOT, and LeTS-Drive (HyP-DESPOT with a learned network).
+In LightDark, we solve for an approximately optimal policy using \textit{local approximation value iteration} (LAVI) \cite{dmubook} over a discretized parametric belief space, and for mineral exploration, the value estimates come from privileged information.
+For a fair comparison, parameters were set to match the total number of simulations of about one million per algorithm.
+
+
+\begin{table*}[b!]
+    \centering
+    \begin{threeparttable}
+        \renewcommand{\arraystretch}{0.95}
+        \begin{adjustbox}{max width=\textwidth}
+        \begin{tabular}{@{}lrrrrrrrrrr@{}}
+            \arrayrulecolor{black} % revert
+            \toprule
+                &  \multicolumn{2}{c}{$\textsc{LightDark}(5)$}  &  \multicolumn{2}{c}{$\textsc{LightDark}(10)$}  &  \multicolumn{2}{c}{$\textsc{RockSample}(15,15)$}  &  \multicolumn{2}{c}{$\textsc{RockSample}({20,20})$}  &  \multicolumn{2}{c}{\textsc{Mineral Exploration}} \\
+            \arrayrulecolor{black}
+            \cmidrule{2-11}
+            \arrayrulecolor{black} % revert
+                &  returns  &  \tcolor time [\textit{off},\textit{on}] s  &  returns  &  \tcolor time [\textit{off},\textit{on}] s  &  returns  &  \tcolor time [\textit{off},\textit{on}] s  &  returns  &  \tcolor time [\textit{off},\textit{on}] s  &  returns  &  \tcolor time [\textit{off},\textit{on}] s \\
+            \midrule
+            \arrayrulecolor{white}
+            BetaZero  &  $\mathBF{4.47 \pm 0.28}$  &  \tcolor{$[\num{2274},\,\num{0.014}]$}  &  $\mathBF{16.77 \pm 1.28}$  &  \tcolor{$[\num{2740},\,\num{0.331}]$}  &  $\num{20.15 \pm 0.71}$  &  \tcolor{$[\num{5701},\,\num{0.477}]$}  &  $\mathBF{13.09 \pm 0.55}$  &  \tcolor{$[\num{7081},\,\num{1.109}]$}  &  $\mathBF{10.67 \pm 2.25}$  &  \tcolor{$[\num{22505},\,\num{5.126}]$}  \\
+            \midrule
+            Raw Policy $P_\theta$  &  $\num{4.44 \pm 0.28}$  &  \tcolor{$[\num{2274},\,\num{0.004}]$}  &  $\num{13.74 \pm 1.33}$  &  \tcolor{$[\num{2740},\,\num{0.004}]$}  &  $\num{10.96 \pm 0.98}$  &  \tcolor{$[\num{5701},\,\num{0.018}]$}  &  $\num{2.03 \pm 0.34}$  &  \tcolor{$[\num{7081},\,\num{0.084}]$}  &  $\num{8.67 \pm 2.52}$  &  \tcolor{$[\num{22505},\,\num{0.533}]$}  \\
+            \midrule
+            Raw Value $V_\theta$\tnote{*}  &  $\num{3.16 \pm 0.4}$  &  \tcolor{$[\num{2274},\,\num{0.008}]$}  &  $\num{12.7 \pm 1.46}$  &  \tcolor{$[\num{2740},\,\num{0.009}]$}  &  $\num{9.96 \pm 0.65}$  &  \tcolor{$[\num{5701},\,\num{0.158}]$}  &  $\num{3.57 \pm 0.40}$  &  \tcolor{$[\num{7081},\,\num{0.204}]$}  &  $\num{9.75 \pm 2.42}$  &  \tcolor{$[\num{22505},\,\num{1.420}]$}  \\
+            % 
+            \arrayrulecolor{black}\midrule
+            % 
+            \tworow{AdaOPS}  &  $\num{3.78 \pm 0.27}$  &  \tworow{\tcolor{$[\num{68},\,\num{0.089}]$}}  &  \tworow{$\num{5.22 \pm 1.77}$}  &  \tworow{\tcolor{$[\num{81},\,\num{0.510}]$}}  &  $\mathBF{20.67 \pm 0.72}$  &  \tworow{\tcolor{$[\num{7},\,\num{2.768}]$}}  &  \tworow{---}  &  \tworow{---}  &  \tworow{$\num{3.33 \pm 1.95}$}  &  \tworow{\tcolor{$[\num{5},\,\num{0.112}]$}}  \\
+                             &  \lit{$\num{3.79 \pm 0.07}$}  &  &  &  & \lit{$\num{17.16 \pm 0.21}$}  &  &  &  &  &  \\
+            \arrayrulecolor{white}\midrule
+            AdaOPS (fixed bounds)  &  $\num{3.7 \pm 0.25}$  &  \tcolor{$[\num{0},\,\num{0.039}]$}  &  $\num{4.98 \pm 2.01}$  &  \tcolor{$[\num{0},\,\num{0.573}]$}  &  $\num{13.37 \pm 0.71}$  &  \tcolor{$[\num{0},\,\num{1.349}]$}  &  $\num{11.66 \pm 0.49}$  &  \tcolor{$[\num{1},\,\num{1.458}]$}  &  \sameresults  &  \sameresults  \\
+            % 
+            \arrayrulecolor{grays1}\midrule
+            % 
+            \tworow{POMCPOW}  &  $\num{3.21 \pm 0.38}$  &  \tworow{\tcolor{$[\num{59},\,\num{0.189}]$}}  &  \tworow{$\num{0.68 \pm 0.41}$}  &  \tworow{\tcolor{$[\num{70},\,\num{1.261}]$}}  &  $\num{11.14 \pm 0.59}$  &  \tworow{\tcolor{$[\num{0},\,\num{0.929}]$}}  &  \tworow{$\num{10.22 \pm 0.47}$}  &  \tworow{\tcolor{$[\num{0},\,\num{1.480}]$}}  &  \tworow{$\num{9.43 \pm 2.19}$}  &  \tworow{\tcolor{$[\num{0},\,\num{6.728}]$}}  \\
+                              &  \lit{$\num{3.23 \pm 0.11}$}  &  &  &  &  \lit{$\num{10.40 \pm 0.18}$}  &  &  &  &  &  \\
+            \arrayrulecolor{white}\midrule
+            POMCPOW (no heuristics)  &  $\num{1.96 \pm 0.58}$  &  \tcolor{$[\num{0},\,\num{0.099}]$}  &  $\num{-5.9 \pm 5.78}$  &  \tcolor{$[\num{0},\,\num{0.742}]$}  &  $\num{10.17 \pm 0.61}$  &  \tcolor{$[\num{0},\,\num{1.485}]$}  &  $\num{4.03 \pm 0.44}$  &  \tcolor{$[\num{0},\,\num{5.173}]$}  &  $\num{5.38 \pm 2.15}$  &  \tcolor{$[\num{0},\,\num{5.915}]$}  \\
+            % 
+            \arrayrulecolor{grays1}\midrule
+            % 
+            \tworow{DESPOT}  &  $\num{2.37 \pm 0.37}$  &  \tworow{\tcolor{$[\num{0},\,\num{0.008}]$}}  &  \tworow{$\num{0.43 \pm 0.36}$}  &  \tworow{\tcolor{$[\num{0},\,\num{0.046}]$}}  &  $\num{18.44 \pm 0.69}$  &  \tworow{\tcolor{$[\num{7},\,\num{3.822}]$}}  &  \tworow{---}  &  \tworow{---}  &  \tworow{$\num{5.29 \pm 2.17}$}  &  \tworow{\tcolor{$[\num{5},\,\num{0.283}]$}}  \\
+                             &  \lit{$\num{2.50 \pm 0.10}$}  &  &  &  &  \lit{$\num{15.67 \pm 0.20}$}  &  &  &  &  &  \\
+            \arrayrulecolor{white}\midrule
+            DESPOT (fixed bounds)  &  $\num{2.70 \pm 0.50}$  &  \tcolor{$[\num{0},\,\num{0.008}]$}  &  $\num{0.49 \pm 0.30}$  &  \tcolor{$[\num{0},\,\num{0.025}]$}  &  $\num{4.29 \pm 0.45}$  &  \tcolor{$[\num{0},\,\num{5.091}]$}  &  $\num{0.00 \pm 0.00}$  &  \tcolor{$[\num{0},\,\num{5.179}]$}  &  \sameresults  &  \sameresults \\
+            % 
+            \arrayrulecolor{grays1}\midrule
+            % 
+            \arrayrulecolor{white}\midrule
+            LeTS-Drive (HyP-DESPOT + $f_\theta$)  &  $\num{3.05 \pm 0.25}$  &  \tcolor{$[\num{1260},\,\num{0.019}]$}  &  $\num{4.08 \pm 5.48}$  &  \tcolor{$[\num{1529},\,\num{0.058}]$}  &  $\num{11.22 \pm 0.27}$  &  \tcolor{$[\num{48064},\,\num{1.576}]$}  &  $\num{9.68 \pm 0.25}$  &  \tcolor{$[\num{63850},\,\num{2.018}]$}  &  $\num{3.17 \pm 2.04}$  &  \tcolor{$[\num{11738},\,\num{4.613}]$}  \\
+            \arrayrulecolor{white}\midrule
+            \arrayrulecolor{black}\midrule
+            Approximately Optimal  &  $\num{4.06 \pm 0.31}$  &  \tcolor{$[\num{18359},\,\num{0.094}]$}  &  $\num{15.04 \pm 1.27}$  &  \tcolor{$[\num{19548},\,\num{0.024}]$}  &  ---  &  ---  &  ---  &  ---  &  $\num{11.9 \pm 0.18}$  &  N/A  \\
+            \arrayrulecolor{black} % revert
+            \bottomrule
+        \end{tabular}
+        \end{adjustbox}
+        \begin{scriptsize}
+            \begin{tablenotes}
+                \item[*] {One-step look-ahead over all actions using only the value network with $5$ observations per action.}
+                \item[\phantom{$\dagger$}] {Entries with ``---'' failed to run, \sameresults{} are the same as the ones above, and entries in \litdesc{parentheses} are from the literature.}
+            \end{tablenotes}
+        \end{scriptsize}
+    \end{threeparttable}
+    \caption{Results comparing \textit{BetaZero} to various state-of-the-art POMDP solvers.}\label{tab:results}
+\end{table*}
+
+
+\begin{figure}[b!]
+    \centering
+    \includegraphics[width=\linewidth]{figures/betazero/results/value_and_policy_plot.pdf}
+    \caption{\textsc{LightDark}$(10)$ value and policy plots compared to the approximately optimal.}
+    \label{fig:lightdark_value_policy}
+\end{figure}
+
+
+\section{Empirical Results and Analysis}
+\Cref{tab:results} shows that BetaZero outperforms state-of-the-art algorithms in most cases, with larger improvements when baseline algorithms do not rely on heuristics.
+We report the mean return and standard error over $100$ seeds, and the [\textit{offline}, \textit{online}] timing in seconds.
+While BetaZero has a large offline timing component, similar to LeTS-Drive, it is significantly less than solving for the approximately optimal policy.
+\Cref{fig:lightdark_value_policy} compares the raw BetaZero value and policy network with LAVI for \textsc{LightDark}$(10)$.
+The plots are shown over the belief space (i.e., mean and std).
+High uncertainty (horizontal axis) makes the agent localize \texttt{up} near $y=10$; it then moves \texttt{down} and \texttt{stops} at the origin.
+Qualitatively, BetaZero learns an approximately optimal policy and value function in areas where training data was collected.
+Areas where BetaZero and the LVAI policy diverge may result from a lack of training data in those regions (top right corners of the policy plots).
+Despite this, BetaZero remains nearly optimal as those beliefs do not occur during execution.
+Out-of-distribution methods could quantify this uncertainty, e.g., an ensemble of networks \cite{salehi2022unified}.
+
+
+In \textsc{RockSample}$(15,15)$, BetaZero is comparable to AdaOPS yet scales better to higher dimensional problems.
+AdaOPS computes an upper bound using QMDP \cite{littman1995learning} to find the optimal utility of the fully observable MDP over all ${k-1}$ rock combinations, which scales exponentially in $n$.
+In problems with larger state spaces, like \textsc{RockSample}$(20,20)$, the QMDP solution is intractable.
+Thus, AdaOPS uses fixed bounds assuming an optimistic $V_\text{max}$ 
+from \textcite{adaops2021review}.
+Indicated in \cref{tab:results}, the raw networks alone perform well but outperform when combined with online planning, enabling reasoning with current information.
+
+
+\begin{figure}[b!]
+    \centering
+    \includegraphics[trim=0 8 0 9, clip, width=0.95\linewidth]{figures/betazero/results/plot_online_performance.pdf}
+    \caption{Online performance of BetaZero compared to POMCPOW.}
+    \label{fig:online}
+\end{figure}
+
+
+\paragraph{Additional online planning.}
+If online algorithms ran for a large number of iterations, one might expect to see convergence to the optimal policy.
+In practice, this may be an intractable number as \cref{fig:online} shows POMCPOW has not reached the required number of iterations for \textsc{RockSample}$(15,15)$.
+Performance of POMCPOW with heuristics up to $10$ million \textit{online} iterations plateaus, indicating that extending online searches alone misses valuable \textit{offline} experience.
+The advantage of BetaZero is that it can generalize from a more diverse set of experiences.
+The inability of existing online algorithms to plan over long horizons is also evident in the mineral exploration POMDP.
+In \cref{fig:minex}, BetaZero prioritizes uncertainty, matching heuristics from \textcite{mern2023intelligent} (i.e., selects actions with high value and uncertainty, shown in yellow).
+POMCPOW ran for one million online iterations without a value estimator heuristic and BetaZero ran online for $100$ iterations (using about $850{,}000$ offline simulations).
+In the figure, the probability of selecting a drilling location is shown as vertical bars for each action, overlaid on the initial belief uncertainty (i.e., the std of the belief in subsurface ore quality).
+BetaZero learned to take actions in areas of the belief space with high uncertainty and high value (which matches the domain-specific heuristics developed by \textcite{mern2023intelligent}), while POMCPOW fails to distinguish between the actions and resembles a uniform policy.
+
+
+\begin{figure*}[t]
+    \centering
+    % Note! Careful of added space at the end of lines, use % at the end of lines without spaces or the plots will not be side-by-side :)
+    \resizebox{\textwidth}{!}{%
+        \includegraphics{figures/betazero/results/minex_betazero.pdf}
+    }
+    \hfill
+    \resizebox{\textwidth}{!}{%
+        \includegraphics{figures/betazero/results/minex_pomcpow.pdf}
+    }
+    \caption{BetaZero prioritizes uncertainty, matching heuristics from \textcite{mern2023intelligent}.}
+    \label{fig:minex}
+\end{figure*}
+
+
+The most closely related algorithm, LeTS-Drive \cite{cai2022closing}, which also includes an offline learning component with online tree search planning, performs better than its DESPOT counterpart without the use of offline heuristics.
+This is observed in all studied POMDPs except for the mineral exploration problem where the DESPOT bounds use privileged information from the approximately optimal bounds on the value function.
+\Cref{tab:results} highlights that LeTS-Drive is able to scale DESPOT to the \textsc{RockSample}$(20,20)$ problem, with overall similar timing results as BetaZero but worse performance.
+This could be attributed to the HyP-DESPOT online tree search used in LeTS-Drive that plans over observation space (similar to POMCPOW) and implicitly constructs beliefs from a set of $K$ scenarios in the tree.
+Therefore, the beliefs are dependent on the number of in-tree scenarios executed, hence the comparable timing results, and not on the actual root node belief that is updated along the tree paths (where belief-state planning incurs different computational expense but with the benefit of planning directly over future uncertainty).
+Instead of the state history as network input, we use the in-tree belief for a better comparison.
+The HyP-DESPOT planner expands the tree over \textit{all} actions instead of using progressive widening with prioritization, and, as we observe in the following ablation studies, expanding on all actions may limit the effective use of the tree search budget, potentially missing promising areas of the reachable futures.
+
+
+\begin{figure}[b!]
+    \centering
+    \includegraphics[width=0.5\textwidth]{figures/betazero/results/z_sweep.pdf}
+    \caption{$Q$-weighted visit count ablation study in \textsc{RockSample}$(20,20)$.}
+    \label{fig:z_sweep}
+\end{figure}
+
+
+\subsection{Ablation Studies}\label{sec:betazero_ablation}
+To test the effect of each contribution, we run several ablation studies.
+The influence of value and visit count information when selecting an action is shown in \cref{fig:z_sweep}.
+Each cell is the mean return for the \textsc{RockSample}$(20,20)$ problem over $100$ online trials, selecting root-node actions via the $\argmax$ of \cref{eq:policy_q_weight} given $z_q$ and $z_n$.
+The cell at $(0,0)$ corresponds to a uniform policy and thus samples actions instead.
+Using only the visit counts (bottom cells) or only the values (left cells) to make decisions is worse than using a combination of the two (diagonals).
+The effect of $Q$-weighting is also shown in the leftmost \cref{fig:ablations}, which suggests that it helps learn faster in \textsc{LightDark}$(10)$.
+
+Unsurprisingly, using the \textit{state uncertainty} encoded in the belief is crucial for learning as indicated in the middle of \cref{fig:ablations}.
+Future work could directly input the particle set into the network, first passing through an order invariant layer \cite{zaheer2017deep}, to offload the belief approximation to the network itself.
+Finally, the rightmost plot in \cref{fig:ablations} suggests that when branching on actions using progressive widening, it is important to first prioritize the actions suggested by the policy network.
+Offline learning fails if instead we sample uniformly from the action space (even in the \textsc{LightDark} case with only three actions).
+In \cref{fig:ablations}, one std is shaded from three seeds using $0.6$ exponential smoothing.
+
+
+\begin{figure}[t]
+    \centering
+    \resizebox{\textwidth}{!}{
+        \includegraphics{figures/betazero/ablations/plot_ablation_q_weighting.pdf}
+        \includegraphics{figures/betazero/ablations/plot_ablation_belief_rep.pdf}
+        \includegraphics{figures/betazero/ablations/plot_ablation_action_selection.pdf}
+    }
+
+    \caption{\textsc{LightDark}$(10)$ ablation study results.}
+    \label{fig:ablations}
+\end{figure}
+
+
+\paragraph{Bootstrapping analysis.}
+When adding a belief-action pair $(b,a)$ to the MCTS tree, initializing the $Q$-values via value-network bootstrapping may improve performance when using a small MCTS budget.
+\Cref{tab:bootstrap} shows the returns and online timing results of an analysis comparing BetaZero with bootstrapping $Q_0(b,a) = R_b(b,a) + \gamma V_\theta(\tilde{b}')$ where $\tilde{b}' = \phi(b')$ and without bootstrapping $Q_0(b,a)=0$.
+Each domain used the online parameters described in \cref{tab:ld_params,tab:rs_params,tab:minex_params}.
+Results indicate that bootstrapping was only helpful in the rock sample problems and incurs additional compute time due to the belief update done in $b' \sim T_b(b,a)$.\footnote{Note that bootstrapping was not used during offline training.}
+In problems with high stochasticity in the belief-state transitions, bootstrapping may be noisy during the initial search due to the transition $T_b$ sampling a single state from the belief.
+Further analysis could investigate the use of multiple belief transitions to better estimate the value, at the expense of additional computation.
+The current $b$ could instead be used for bootstrapping, but we would expect similar results in sparse reward problems.
+
+
+\begin{table*}[h!]
+    \vspace*{2mm}
+    \centering
+    \begin{threeparttable}
+        \begin{adjustbox}{max width=\textwidth}
+        \begin{tabular}{@{}lrrrrrrrrrr@{}}
+            \arrayrulecolor{black} % revert
+            \toprule
+                & \multicolumn{2}{c}{$\textsc{LightDark}(5)$}  &  \multicolumn{2}{c}{$\textsc{LightDark}(10)$}  &  \multicolumn{2}{c}{$\textsc{RockSample}(15,15)$}  &  \multicolumn{2}{c}{$\textsc{RockSample}({20,20})$}  &  \multicolumn{2}{c}{\textsc{Mineral Exploration}} \\
+            \arrayrulecolor{lightgray}
+            \cmidrule{2-11}
+            \arrayrulecolor{black} % revert
+                & returns & time [s] & returns & time [s] & returns & time [s] & returns & time [s] & returns & time [s] \\
+            \midrule
+            \arrayrulecolor{white}
+            BetaZero (bootstrap)     &  $\num{4.22 \pm 0.31}$  &  $\num{0.014}$  &  $\num{14.45 \pm 1.15}$  &  $\num{0.34}$  &  $\mathBF{20.15 \pm 0.71}$  &  $\num{0.48}$  &  $\mathBF{13.09 \pm 0.55}$  &  $\num{1.11}$  &  $\num{10.32 \pm 2.38}$  &  $\num{6.27}$  \\
+            \midrule
+            BetaZero (no bootstrap)  &  $\mathBF{4.47 \pm 0.28}$  &  $\num{0.014}$  &  $\mathBF{16.77 \pm 1.28}$  &  $\num{0.33}$  &  $\num{19.50 \pm 0.71}$  &  $\num{0.42}$  &  $\num{11.00 \pm 0.54}$  &  $\num{0.57}$  &  $\mathBF{10.67 \pm 2.25}$  &  $\num{4.46}$  \\
+            \arrayrulecolor{black} % revert
+            \bottomrule
+        \end{tabular}
+        \end{adjustbox}
+        \begin{tablenotes}
+            \footnotesize
+            \item[\phantom{*}] {Reporting mean $\pm$ standard error over $100$ seeds (i.e., episodes); timing is average per episode.}
+        \end{tablenotes}
+    \end{threeparttable}
+    \caption{Effect of $Q$-value bootstrapping in online \textit{BetaZero} performance.}\label{tab:bootstrap}
+    \vspace*{-2mm}
+\end{table*}
+
+
+\subsection{Limitations of Double Progressive Widening}
+
+Double progressive widening (DPW) is a straightforward approach to handle large or continuous state and action spaces in Monte Carlo tree search.
+It is easy to implement and only requires information available in the tree search, i.e., number of children nodes and number of node visits.
+It is known that MCTS performance can be sensitive to DPW hyperparameter tuning, and \textcite{sokota2021monte} show that DPW ignores information about the relation between states that could provide more intelligent branching.
+\textcite{sokota2021monte} introduced \textit{state abstraction refinement} that uses a distance metric between states to determine if a similar state should be added to the tree, requiring a state transition every time a state-action node is visited.
+For our work, we want to reduce the number of expensive belief-state transitions in the tree and avoid the use of problem-specific heuristics required when defining distance metrics.
+Using DPW in BetaZero was motivated by simplicity and allows future work to innovate on the components of belief-state and action branching.
+
+
+\begin{figure}[b!]
+    \captionsetup{font={small}}
+    \centering
+    \begin{subfigure}[t]{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/betazero/appendix/spw_sweep_ld10.pdf}
+        \caption{Belief-state progressive widening sensitivity.}
+        \label{fig:spw_sensitivity_ld10}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.475\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/betazero/appendix/apw_sweep_ld10.pdf}
+        \caption{Action progressive widening sensitivity.}
+        \label{fig:apw_sensitivity_ld10}
+    \end{subfigure}
+    \caption{Progressive widening sensitivity analyses for $\textsc{LightDark}(10)$.}
+    \label{fig:pw_sensitivity_ld10}
+\end{figure}
+
+
+To analyze the sensitivity of DPW, \cref{fig:spw_sensitivity_ld10,fig:apw_sensitivity_ld10} show a sweep over the $\alpha$ and $k$ parameters for DPW in $\textsc{LightDark}(10)$.
+\Cref{fig:spw_sensitivity_ld10} shows that the light dark problem is sensitive to belief-state widening and \cref{fig:apw_sensitivity_ld10} indicates that this problem may not require widening on all actions---noting that when $k=0$, the only action expanded on is the one prioritized from the policy head $a\sim P_\theta(\tilde{b}, \cdot)$.
+The light dark problems have a small action space of ${|\mathcal{A}|=3}$; therefore, this prioritization leads to good performance when only a single action is evaluated (left cells in \cref{fig:apw_sensitivity_ld10} when $k=0$).
+
+In $\textsc{RockSample}(20,20)$, \cref{fig:spw_sensitivity_rs20,fig:apw_sensitivity_rs20} indicate that this problem benefits from a higher widening factor (top right of the figures) as the action space ${|\mathcal{A}|=25}$ is larger and the belief-state transitions operate over a much larger state space.
+DPW uses a single branching factor throughout the tree search, and research into methods that adapt the branching based on learned information would be a valuable direction to explore.
+
+
+\begin{figure}[t!]
+    \captionsetup{font={small}}
+    \centering
+    \begin{subfigure}[t]{0.49\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/betazero/appendix/spw_sweep_rs20.pdf}
+        \caption{Belief-state progressive widening sensitivity.}
+        \label{fig:spw_sensitivity_rs20}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.47\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/betazero/appendix/apw_sweep_rs20.pdf}
+        \caption{Action progressive widening sensitivity.}
+        \label{fig:apw_sensitivity_rs20}
+    \end{subfigure}
+    \caption{Progressive widening sensitivity analyses for $\textsc{RockSample}(20,20)$.}
+    \label{fig:pw_sensitivity_rs20}
+\end{figure}
+
+\textcite{lim2023optimality} introduce a class of POMDP planning algorithms that use a fixed number of samples to branch on instead of progressive widening.
+The bottom rows of \cref{fig:pw_sensitivity_ld10,fig:pw_sensitivity_rs20} (where $\alpha = 0$) can be interpreted as a fixed branching factor compared to progressive widening in the other cells. The analysis in the figures shows that there are cases where BetaZero has better performance when using progressive widening (lighter colors).
+
+
+\section{Open-Sourced Code and Experiments}
+
+The BetaZero algorithm has been open sourced and incorporated into the Julia programming language \texttt{POMDPs.jl} ecosystem \cite{pomdps_jl}.
+Fitting into this ecosystem allows BetaZero to access existing POMDP models and can easily be compared to various POMDP solvers.
+The user constructs a {\color{juliafunccolor}\texttt{BetaZeroSolver}} that takes parameters for policy iteration and data generation, parameters for neural network architecture and training, and parameters for MCTS (described in the tables above).
+The user may choose to define a method that inputs the belief $b$ and outputs the belief representation $\tilde{b}$ used by the neural network by defining the \texttt{b̃ = {\color{juliafunccolor}input\_representation}(b)} interface (where the default computes the mean and std of the belief).
+Given a \texttt{pomdp::{\color{juliafunccolor}POMDP}} structure defining the problem, a \texttt{solver::{\color{juliafunccolor}BetaZeroSolver}} is constructed and solved using the following to get the policy:
+\begin{equation*}
+\texttt{policy = {\color{juliafunccolor}solve}(solver, pomdp)}
+\end{equation*}
+which runs \textit{offline} policy iteration (\cref{alg:betazero}). Once you have a trained neural network, an action can then be generated \textit{online} from the policy given a belief $b$ using the following code (which runs \cref{alg:mcts-top-lvl}):
+\begin{equation*}
+\texttt{a = {\color{juliafunccolor}action}(policy, b)}
+\end{equation*}
+All experiments, including the experiment setup for the baseline algorithms with their heuristics, are included for reproducibility.
+Code to run MCTS data collection across parallel processes is also included.
+The code and experiments from this work are available online.\footnote{\url{https://github.com/sisl/BetaZero.jl}}
+
+
+\section{Conclusions}
+In this chapter, we proposed the \textit{BetaZero} belief-state planning algorithm for POMDPs; designed to learn from \textit{offline} experience to inform \textit{online} decisions.
+Planning in belief space explicitly handles state uncertainty, and learning offline approximations to replace hand-crafted or expensive heuristics enables effective online planning in long-horizon POMDPs.
+Although belief-space planning incurs expensive belief updates in the tree search, we address the limited search budget used in practice by incorporating all information available in the search tree to (a) train the policy vector target (using the $Q$-weighted visit counts), and (b) sample from the policy network during action progressive widening to prioritize promising actions.
+Stochastic belief-state transitions in MCTS are addressed using \textit{progressive widening} and we test a belief representation of summary statistics to allow beliefs as input to the value and policy network.
+Results indicate that BetaZero scales to larger problems where certain heuristics break down and, as a result, can solve large-scale POMDPs by learning to plan in belief space using zero heuristics.
+
+\subsection{Limitations}
+In standard POMDP planning algorithms, models are assumed to be known, yet this may limit the applicability to certain problems where reinforcement learning may be better suited.
+We chose a simplified belief representation to allow for further research innovations in using other parametric and non-parametric representations.
+Other limitations include compute resource requirements for training neural networks and parallelizing MCTS simulations.
+We designed BetaZero to use a single GPU for training and to scale based on available CPUs.
+Certain POMDPs may not require this training burden, especially when known heuristics perform well.
+BetaZero is useful for long-horizon, high-dimensional POMDPs but may be unnecessary when offline training is computationally limited.
+BetaZero is designed for problems where the simulation cost is the dominating factor compared to offline training time.
+For safety-critical problems, the standard approach would be to tune the cost components of the reward function to achieve a desired level of safety (as is standard in POMDP and RL problems).
+The next chapter introduces a natural extension to BetaZero to address the challenge of safe planning given a desired target level of safety.

@@ -1,0 +1,757 @@
+\chapter{Safety Validation using Probabilistic Surrogates}\label{ch:bsv}
+\chapterquote{%
+The road to wisdom? \\
+Well, it's plain and simple to express: \\
+\qquad Err \\
+\qquad and err \\
+\qquad and err again, \\
+\qquad but less \\
+\qquad and less \\
+\qquad and less.}{Piet Hein}
+
+Once we have a policy that we deem is safe (i.e., from algorithms presented in \cref{ch:constrainedzero}), the next step is to estimate the probability of failure over the entire operating domain.
+Estimating the probability of failure is an important step in the certification of safety-critical systems.
+Efficient estimation methods are often needed due to the challenges posed by high-dimensional input spaces, risky test scenarios, and computationally expensive simulators.
+This chapter frames the problem of black-box safety validation as a Bayesian optimization problem and introduces a method that iteratively fits a probabilistic surrogate model to efficiently predict failures.
+The algorithm is designed to search for failures, compute the most-likely failure, and estimate the failure probability over an operating domain using importance sampling.
+We introduce three acquisition functions that aim to reduce uncertainty by covering the design space, optimize the analytically derived failure boundaries, and sample the predicted failure regions.
+Results show our \textit{Bayesian safety validation} approach provides a more accurate estimate of failure probability with orders of magnitude fewer samples compared to baselines, and performs well across various validation metrics.
+We test the method on three toy problems, a stochastic POMDP, and a neural network-based runway detection system.
+This work is currently being used to supplement the FAA certification process of the machine learning components for an autonomous cargo aircraft \cite{durand2023formal}.
+
+\section{Motivation}
+
+Certifying safety-critical autonomous systems is an important step for their safe deployment in domains such as aviation. 
+Examples of safety-critical aviation systems include those for detect and avoid \cite{do365,owen2019acasxu}, collision avoidance \cite{kochenderfer2012next}, runway detection \cite{khaled2015runway}, and auto-land \cite{balduzzi2021neural}.
+One way to provide a quantitative measure of safety is to estimate the probability of system failure.
+The process of estimating the probability of failure can highlight areas of weakness in the system (by uncovering failures) and can show how well the system performs in their operating environments.
+The rarity of failures makes it challenging to accurately estimate failure probability, especially when using computationally expensive simulators \cite{de2005tutorial}.
+Therefore, it is important to efficiently sample the design space when searching for failures (using a minimum set of inputs) and to maximize a measure of confidence in the resulting failure probability estimate.
+
+A standard approach for estimating this rare-event probability involves using Monte Carlo (MC) sampling to generate a set of system inputs from a likelihood model of the operating environment.
+Estimating this rare-event probability through MC sampling can be computationally expensive and usually requires a large number of samples to minimize the variance of the estimate \cite{de2005tutorial}.
+A variance-reduction technique to more efficiently estimate the failure probability uses \textit{importance sampling} \cite{robert1999monte,owen2013monte} to draw samples from a different distribution, called the \textit{proposal}, and then re-weight the expectation based on the likelihood ratio between the operational model and the proposal.
+Importance sampling is especially useful in the safety-critical case due to its unbiased failure probability estimate \cite{owen2013monte}.
+
+Bayesian optimization algorithms such as the cross-entropy method (CEM) \cite{rubinstein2004cross,moss2020crossentropy} have been adapted to the problem of rare-event estimation through a multi-level procedure \cite{de2005tutorial, miller2021rare}, but rely on a real-valued system output with a defined failure threshold to adaptively narrow the search.
+\textcite{arief2021deep} proposed a deep importance sampling approach for rare-event estimation of black-box systems (Deep-PrAE), but rely on similar real-valued systems.
+In our problem, the system under test outputs a binary value indicating failure and thus cannot effectively use these methods.
+
+Population-based methods, like population Monte Carlo (PMC) \cite{cappe2004population} and optimized population Monte Carlo (O-PMC) \cite{elvira2022optimized}, 
+work well for both real-valued and binary-valued systems and use adaptive importance sampling \cite{bugallo2017adaptive} to iteratively estimate the optimal proposal distribution.
+The PMC algorithms use self-normalized importance sampling (SNIS) to estimate the probability in question \cite{owen2013monte}.
+Population-based approaches often require a large number of system evaluations to adequately converge (see \textcite{luengo2020survey} for a comprehensive survey of Monte Carlo estimation algorithms).
+
+\textcite{vazquez2009sequential} and \textcite{wang2016gaussian} consider the problem of failure probability estimation when dealing with computationally expensive systems.
+They fit a Gaussian process surrogate model to the underlying real-valued system (i.e., not the system output indication of failure) and then estimate the failure probability over this surrogate, similar to work from \textcite{renganathan2022multifidelity} for the multifidelity case.
+These methods may not work on binary-valued systems or scale to complex systems such as image-based neural networks.
+\textcite{he2020framework} propose a framework for analyzing safety-critical deep neural networks using Bayesian statistics to iteratively fit a decision boundary from a predefined dictionary of shapes.
+They use a boundary acquisition function that is based on expected improvement \cite{ranjan2008sequential}, requiring a definition of an $\epsilon$-threshold around the predicted boundaries at $0.5 \pm \epsilon$.
+Our proposed approach constructs a probabilistic surrogate model such that a failure boundary can be analytically derived.
+
+With the goal of sample efficiency, this chapter reformulates the safety validation problem \cite{corso2021survey} as a Bayesian optimization problem \cite{mockus1989global,optbook,garnett2023bayesian} and introduces a set of acquisition functions, each with their own safety validation objective.
+Applying a Bayesian approach allows us to fit a probabilistic surrogate model to a minimal set of design points evaluated from the true system and then estimate failure probability using importance sampling on the inexpensive surrogate.
+As a real-world case study, we use the proposed algorithm to estimate the failure probability for a neural network-based runway detection system where the design space consists of the glide slope angle and the distance to runway.
+The parametric design space is used to generate an input image of a runway in simulation, conditioned on the knowledge that the aircraft is on an approach, and the output is a binary value of failure.
+We classify misdetections as failures, knowing that the runway detection system is only active on an approach to land.
+
+The goals of this work are to: 
+(1) estimate the probability of failure for a black-box safety-critical system,
+(2) focus on sample efficiency using a minimal number of data points,
+(3) find realistic cases using a model of the environment the system will be operating in, weighting the failures based on their operational likelihood,
+(4) characterize the entire set of failure regions to identify model weaknesses for further development, and
+(5) ensure the entire design space is adequately covered.
+The proposed \textit{Bayesian safety validation} (BSV) algorithm can be applied to general black-box systems to find failures, determine the most-likely failure, and estimate the overall failure probability---thus, satisfying the three safety validation tasks of \textit{falsification}, \textit{most-likely failure analysis}, and \textit{failure probability estimation} \cite{corso2021survey}.
+An open-source Julia framework\footnote{\url{https://github.com/sisl/BayesianSafetyValidation.jl}} was developed to extend this work to other black-box systems and reproduce the results in this chapter.
+
+
+\section{Problem Formulation}\label{sec:problem}
+The Gaussian process (GP) is a probabilistic surrogate model that is particularly useful in black-box Bayesian optimization \cite{williams2006gaussian,optbook}.
+In this chapter, we develop our method around the GP surrogate model to be used as a way to predict failure probabilities of an expensive black-box system.
+Following the GP review in the background \cref{sec:gp}, we introduce a straightforward way to predict probabilities using a GP and develop three acquisition functions that satisfy the safety validation tasks presented in the background \cref{sec:safety_validation}.
+
+\subsection{Predicting Probabilities using Gaussian Process}
+Because our system $f$ returns discrete values in $\{0,1\}$ and we want to predict a real-valued probability in $[0,1]$, we consider this a binary classification problem \cite{williams1998bayesian,nickisch2008approximations}.
+We construct the GP to predict the logits $\hat{\vec{z}}$ (which we define with zero mean to indicate no prior knowledge of failures) and then apply the logistic function (i.e., sigmoid) to get the predictions $\hat{\vec{y}}$:
+\begin{gather}
+    \hat{\vec{z}} \mid \operatorname{logit}(\vec{y}) \sim \mathcal{N}\bigl(\vec{\mu}(\vec{X},\vec{X}',\operatorname{logit}(\vec{y})), \vec{\Sigma}(\vec{X},\vec{X}')\bigr)\\
+    \operatorname{logit}(y_i) = \log\left(\frac{\phi(y_i)}{1 - \phi(y_i)}\right)/s\\
+    \hat{\vec{y}} = \phi^{-1}\Bigl(\operatorname{logit}^{-1}(\hat{\vec{z}})\Bigr) = \phi^{-1}\left(\frac{1}{1 + \exp(-s\hat{\vec{z}})}\right)\label{eq:sigmoid}
+\end{gather}
+where $\phi(y_i) = y_i(1 - \epsilon) + (1 - y_i)\epsilon$ and $\phi^{-1}(\hat{y}_i) = (\hat{y}_i - \epsilon) / (1 - 2\epsilon)$ to ensure well defined logits and $s$ controls the steepness of the sigmoid curve.
+This construction can still be used even if $f$ already outputs values in $[0,1]$ instead of binary indicators; the GP will fit directly to the provided failure probability of each point.
+When the output is binary, applying the logit transformations ensure that the prediction lies in $[0,1]$ and can be interpreted probabilistically.
+Other approaches for predicting a probability using a Gaussian process explore the case where $f$ is bounded and can be modeled as a Beta distribution \cite{jensen2013bounded}.
+The logit approach allows us to analytically derive failure boundaries.
+
+We frame the black-box safety validation problem as a Bayesian optimization problem and use a Gaussian process surrogate model to predict failures.
+Bayesian optimization is a natural approach to optimize some function $f: \mathbb{R}^n \to \mathbb{R}$, e.g., a black-box system.
+But our problem uses a function $f: \mathbb{R}^n \to \mathbb{B}$, where $\mathbb{B}$ represents the Boolean domain (returning \texttt{true} for failures and \texttt{false} for non-failures, which can be interpreted as $1$ and $0$, respectively).
+Instead of maximizing or minimizing $f$, we frame the problem to find failure regions through exploration, refine failure boundaries, and refine likely failure regions through sampling the theoretically optimal failure distribution \cite{kahn1953methods,murphy2012machine,owen2013monte}.
+We introduce a set of three acquisition functions that accomplish these objectives and call the acquisition procedure \textit{failure search and refinement} (FSAR), shown together in \cref{alg:fsar}.
+Although we are primarily interested in the more restrictive case where $f$ outputs a Boolean, our approach also works when $f$ outputs a probabilistic value of failure (demonstrated in \cref{sec:prob_valued_sys}).
+Throughout, we use the fact that the surrogate model provides a probabilistic interpretation of the failure predictions regardless of the type of system outputs.
+
+\paragraph{Uncertainty exploration.} To find failures and cover the design space $\mathcal{X}$, we want to explore areas with high uncertainty and high operational likelihood. The first proposed acquisition function searches over the uncertainty provided by the Gaussian process $\hat{\sigma}(\vec{x})$ weighted by the operational model $p(\vec{x})$ to find likely points $\vec{x} \in \mathcal{X}$ with maximal uncertainty:
+\begin{equation}
+    \vec{x}'_1 = \argmax_{\vec{x} \in \mathcal{X}} \hat{\sigma}(\vec{x})p(\vec{x})^{1/\alpha t} \label{eq:uncertainty_exploration}
+\end{equation}
+The influence of the operational model is decayed by $1/\alpha t$.
+This will ensure that the design space $\mathcal{X}$ is fully explored in the limit \cite{williams2006gaussian}, noting that in practice the limiting factor is the $\mathcal{O}(n^3)$ time for the Gaussian process to fit $n$ data points due to the $n \times n$ matrix inversion \cite{quinonero2005unifying}. Equation \ref{eq:uncertainty_exploration} may also be sampled instead of taking the $\argmax$ where the concentration of the distribution can be controlled by a temperature parameter $\tau$:
+\begin{equation}
+    \vec{x}'_1 \sim \big(\hat{\sigma}(\vec{x})p(\vec{x})^{1/\alpha t}\big)^{1/\tau} \label{eq:uncertainty_exploration_sampled}    
+\end{equation}
+This distribution is normalized over the domain to compute the proposal likelihood $q(\vec{x}_i)$ of each sample. The likelihood is used to compute the weight $w(\vec{x}_i) = p(\vec{x}_i) / q(\vec{x}_i)$ for self-normalized importance sampling (see \cref{sec:is}).
+
+\paragraph{Boundary refinement.} To better characterize the areas of all failure regions, we want to refine the known failure boundaries to tighten them as much as possible.
+Because our surrogate $\hat{f}(\vec{x})$ is modeled as a logistic function (shown in \cref{eq:sigmoid}), we can take the derivative and get the analytical form as:
+\begin{equation}
+    \mu'(\vec{x}) = \hat{f}(\vec{x})(1 - \hat{f}(\vec{x}))
+\end{equation}
+where $\mu'(\vec{x})$ is maximal when $\hat{f}(\vec{x}) = 0.5$, thus giving us the failure boundary at the peaks.
+Therefore, the second proposed acquisition function selects the point that maximizes the upper confidence of $\mu'$ to refine the failure boundary:
+\begin{equation}
+    \vec{x}'_2 = \argmax_{\vec{x} \in \mathcal{X}} \bigl(\mu'(\vec{x}) + \lambda\hat{\sigma}(\vec{x})\bigr)p(\vec{x})^{1/\alpha t} \label{eq:boundary_refinement}
+\end{equation}
+where upper confidence provides an over estimation, and we set $\lambda = 0.1$ in our experiments.
+The operational model $p(\vec{x})$ is used to first focus on the failure boundary with high operational likelihood, then decay the emphasis of the likelihood as a function of the current iteration $t$ (here using an inverse decay of $1/\alpha t$).
+This will first acquire likely points along the boundaries, then refine all of the boundaries because as $t \to \infty$ then $p(\vec{x})^{1/\alpha t} \to 1$.
+
+Similar to \cref{eq:uncertainty_exploration_sampled}, we may also choose to sample along the boundary in \cref{eq:boundary_refinement} with a temperature parameter $\tau$ and compute the weights after normalization:
+\begin{equation}
+    \vec{x}'_2 \sim \big(\bigl(\mu'(\vec{x}) + \lambda\hat{\sigma}(\vec{x})\bigr)p(\vec{x})^{1/\alpha t}\big)^{1/\tau} \label{eq:boundary_refinement_sampled}
+\end{equation}
+Sampling these acquisition functions may be advantageous when the black-box system is stochastic, thus making the failure boundaries noisy (\cref{sec:pomdp_example,sec:pomdp_results}).
+
+\paragraph{Failure region sampling.} The optimal importance sampling distribution is
+\(
+q_\text{opt} \propto f(\vec{x})p(\vec{x}),
+\)
+which, intuitively, is the distribution of failures (when $f(\vec{x}) = 1$) over the likely region (weighed by $p(\vec{x})$) \cite{kahn1953methods,murphy2012machine,owen2013monte}.
+Yet this is exactly what we are trying to estimate, and sampling this distribution may require a prohibitive number of evaluations of $f$.
+Therefore, the third proposed acquisition function uses the surrogate to get the upper confidence of the failure prediction:
+\begin{align}
+    \hat{h}(\vec{x}) &= \hat{f}(\vec{x}) + \lambda\hat{\sigma}(\vec{x})\\
+    \hat{g}(\vec{x}) &= \mathds{1}\bigl\{\hat{h}(\vec{x}) \ge 0.5\bigr\}
+\end{align}
+and then using the estimated failure region $\hat{g}$, we draw a sample from the distribution:
+\begin{equation}
+    \vec{x}'_3 \sim \hat{g}(\vec{x})p(\vec{x}).
+\end{equation}
+Here, we use the indicator function $\mathds{1}\{ \cdot \}$, which returns $1$ when the input is \texttt{true} and $0$ otherwise.
+Sampling from the approximate failure distribution defined by the surrogate helps refine likely failure regions to ensure a better estimate of the probability of failure.
+If the system $f$ outputs a failure probability value in $[0,1]$ instead of a binary indicator, then we can use this information and sample from the distribution that weights towards higher confidence failures:
+\begin{equation}
+    \vec{x}'_3 \sim \hat{g}(\vec{x})\hat{h}(\vec{x})p(\vec{x}) \label{eq:frs_pvalue}
+\end{equation}
+
+The proposed acquisition functions work under a more restrictive binary system $f: \mathbb{R}^n \to \mathbb{B}$ and a system $f: \mathbb{R}^n \to [0,1]$ that outputs a probabilistic value of failure (which can be interpreted as confidence or stochasticity).
+We define \textit{failure region sampling} using the more general distribution in \cref{eq:frs_pvalue} because it works for both types of system outputs.
+When a granular measure of system failure is available, it can be used to make a more informative surrogate model.
+If only binary failure information is available, developers could simply focus on those failures with high likelihood.
+Applying to binary-valued systems is more general and thus the primary focus of this work, but we demonstrate on a probability-valued case in \cref{sec:prob_valued_sys}.
+In the case when no failures are predicted (i.e., $\hat{g}(\vec{x}) = 0,\, \forall \vec{x} \in \mathcal{X}$), then we sample directly from $\hat{h}$.
+
+\begin{figure}[b!]
+    \centering
+    \includesvg[inkscapelatex=false, width=\textwidth]{figures/bsv/toys/plot-combined-30-booth-models.svg}
+    \caption{Illustrating $90$ steps of the \textit{failure search and refinement} acquisition functions.}
+    \label{fig:fsar_toy}
+\end{figure}
+
+\Cref{alg:fsar} describes the \textit{failure search and refinement} (FSAR) procedure to compute the subsequent points from the three proposed acquisition functions. \Cref{fig:fsar_toy} provides an illustrative example of the probabilistic surrogate model with predicted failures (shown in red) and the \textit{failure search and refinement} acquisition functions after $T=\num{30}$ iterations (with $N=\num{90}$ data points, showing true observations as red/green squares).
+Lighter colors indicate maximums, and red circles indicate the next selected point.
+The operational likelihood model $p(\vec{x})$ is shown as marginal distribution subplots.
+Notice the low uncertainty around the likely failure region and the influence of $p(\vec{x})$ on the boundary refinement; the algorithm first refines the likely boundary, and then refines the entire boundary in the limit. The system under test is an example system shown in \cref{fig:toy_rep}.
+
+\input{algorithms/bsv/fsar-algorithm}
+
+\subsection{Importance Sampling Estimate of Failure Probability}\label{sec:is}
+
+To compute an efficient and unbiased estimate of the probability of failure, we use \textit{importance sampling} \cite{owen2013monte}.
+Probability estimation can be defined as computing the expectation of the Boolean-valued function $f$ over the \textit{target}, or \textit{nominal distribution}, $p$ (what we call the \textit{operational likelihood model} in this work) as:
+\begin{equation}\label{eq:expectation}
+    \mathbb{P}[f(\vec{x})] = \operatorname*{\mathbb{E}}_{\vec{x} \sim p}[f(\vec{x})] = \int_\mathcal{X} p(\vec{x})f(\vec{x}) \ dx.
+\end{equation}
+In general, the expectation of the indicator function of an event $A$, denoted $\mathds{1}\{A\}$, is equal to the probability of that event occurring $\mathbb{E}[\mathds{1}\{A\}] = \mathbb{P}[A]$.
+In our problem, we define $f: \mathbb{R}^n \to \mathbb{B}$ as a Boolean-valued function for convenience.
+Nevertheless, the following work could easily be extended to a real-valued function $v: \mathbb{R}^n \to \mathbb{R}$ where failures are defined by violating some safety threshold $c$, i.e., $f(\vec{x}) = \mathds{1}\{v(\vec{x}) \ge c\}$.
+Now, to approximate the expectation---and therefore the probability of failure---we can use $n$ MC samples from $p$:
+\begin{equation}
+    \operatorname*{\mathbb{E}}_{\vec{x} \sim p}[f(\vec{x})] \approx \frac{1}{n} \sum_{i=1}^n f(\vec{x}_i)
+\end{equation}
+If failures are rare under the distribution $p$ (i.e., $f(\vec{x}_i)$ is rarely equal to $1$ when $\vec{x}_i \sim p$), then we may need an extremely large number of samples from $p$ to get an accurate estimate.
+But this would require prohibitively many system evaluations of $f$. 
+Instead, importance sampling states that we can sample from some other distribution $q$, called the \textit{proposal distribution}, and re-weight the outputs of $f$ based on the \textit{likelihood ratio} $p(\mathbf{x})/q(\mathbf{x})$ \cite{owen2013monte}:
+\begin{align}
+    \operatorname*{\mathbb{E}}_{\vec{x} \sim p}[f(\vec{x})] &= \operatorname*{\mathbb{E}}_{\vec{x} \sim q}\left[\frac{p(\vec{x})}{q(\vec{x})}f(\vec{x})\right] \\
+    &\approx \frac{1}{n} \sum_{i=1}^n \frac{p(\vec{x}_i)}{q(\vec{x}_i)}f(\vec{x}_i)
+\end{align}
+Now we can use samples from $q$ to approximate the probability over $p$.
+However, selecting an effective proposal distribution can be challenging (see \textcite{bugallo2017adaptive}).
+Based on whether the black-box system is stochastic or deterministic, we can employ different importance sampling methods to estimate the proposal distribution.
+
+\paragraph{Discrete proposal.}
+In the case of deterministic systems, where every input $\vec{x}$ maps deterministically to an output $y$, we could use a uniform proposal over the design space $q = \mathcal{U}_\mathcal{X}$ and replace the expensive function calls to $f$ with inexpensive evaluations of the surrogate $\hat{f}$ using orders of magnitude more samples.
+We let $\hat{g}(\vec{x}) = \mathds{1}\{\hat{f}(\vec{x}) \ge 0.5\}$ to indicate failures predicted by the surrogate model.
+Thus, our problem gets simplified to estimating:
+\begin{equation}
+    \hat{p}_\text{fail} = \operatorname*{\mathbb{E}}_{\vec{x} \sim p}[\hat{g}(\vec{x})] = \operatorname*{\mathbb{E}}_{\vec{x} \sim q}\left[\frac{p(\vec{x})}{q(\vec{x})}\hat{g}(\vec{x})\right] \approx \frac{1}{n} \sum_{i=1}^n \frac{p(\vec{x}_i)}{q(\vec{x}_i)}\hat{g}(\vec{x}_i).\label{eq:pfail}
+\end{equation}
+Using a uniform distribution can induce variance in the estimate \cite{bishop2006pattern}; therefore, an even further simplification is to use a discretized set of $n$ points $\widebar{\mathcal{X}}$ over the range $\mathcal{X}$ as our proposal.
+We assigned equal likelihood to each point $\vec{x}_i \in \widebar{\mathcal{X}}$, namely $q(\vec{x}_i) = 1/n\sum_{j=1}^n p(\vec{x}_j)$.
+Then \cref{eq:pfail} becomes:
+\begin{equation}
+    \hat{p}_\text{fail} \approx \frac{1}{n} \sum_{i=1}^n \frac{p(\vec{x}_i)}{1/n\sum_{i=1}^n p(\vec{x}_i)}\hat{g}(\vec{x}_i) = \frac{\sum_{i=1}^n p(\vec{x}_i)\hat{g}(\vec{x}_i)}{\sum_{i=1}^n p(\vec{x}_i)} = \frac{\vec{w}^\top\hat{\vec{y}}}{\sum_{i=1}^n w_i}
+\end{equation}
+where $\vec{w} = [p(\vec{x}_1), \ldots, p(\vec{x}_n)]$ and $\hat{\vec{y}} = [\hat{g}(\vec{x}_1), \ldots, \hat{g}(\vec{x}_n)]$ for $\vec{x}_i \in \widebar{\mathcal{X}}$.
+Here, we are using \textit{likelihood weighting}, which is a special case of importance sampling \cite{bishop2006pattern,murphy2012machine}.
+Using a discrete set of points as the proposal distribution has lower variance than sampling the uniform space, but may not scale well to higher dimensions.
+For this chapter, we use a simplified $500 \times 500$ discrete grid as the proposal for two-dimensional systems.
+To incorporate better proposal distributions when scaling to higher dimensions, see \textcite{bugallo2017adaptive} for adaptive importance sampling methods.
+
+\paragraph{Self-normalizing importance sampling.}
+To address the case of stochastic systems, where the output of the system is a random variable, we use the surrogate model to guide the search based on the FSAR acquisition functions and collect the 
+weights $w(\vec{x})$ from the sampled points of the acquisition functions to estimate the failure probability as:
+\begin{align}
+    \hat{p}_\text{fail} = \frac{\sum_{i=1}^n w(\vec{x}_i) y_i}{\sum_{j=1}^n w(\vec{x}_j)}
+\end{align}
+which is the \textit{self-normalized importance sampling estimate} (SNIS) and will equal the true target value in the limit \cite{owen2013monte}.
+The variance estimate is computed as:
+\begin{equation}
+    \hat{\operatorname{Var}}(\hat{p}_\text{fail}) = \sum_{i=1}^n \bar{w}(\vec{x}_i)^2 (y_i - \hat{p}_\text{fail})^2    
+\end{equation}
+where $\bar{w}(\vec{x}_i) = w(\vec{x}_i) / \sum_{j=1}^n w(\vec{x}_j)$ and the $99\%$ confidence interval is $\hat{p}_\text{fail} \pm 2.58 \sqrt{\hat{\operatorname{Var}}(\hat{p}_\text{fail})}$.
+Because failures are stochastic, applying the self-normalized weights to the true system outputs $y_i \in \vec{Y}$ means we can estimate the failure probability over observed failures and compute proposal weights for only the observed points using the surrogate, thus avoiding computing the surrogate over a large discrete grid proposal.
+
+
+\section{Proposed Algorithm: Bayesian Safety Validation}
+
+The proposed \textit{Bayesian safety validation} (BSV) algorithm takes as input the black-box system $f: \mathbb{R}^n \to \mathbb{B}$ or $f: \mathbb{R}^n \to [0,1]$ and an operational likelihood model $p: \mathbb{R}^n \to \mathbb{R}_{\ge 0}$ for inputs $\vec{x} \in \mathbb{R}^n$ of some parametric space, and iteratively refits a probabilistic surrogate model given selected points from the FSAR acquisition functions (\cref{sec:problem}).
+The first acquisition, \textit{uncertainty exploration}, explores areas with high uncertainty to provide coverage and search for failure regions.
+The next acquisition, \textit{boundary refinement}, selects operationally likely points that refine the failure boundaries to better characterize likely failure regions (and includes a decaying weighted operational likelihood to refine all failure boundaries in the limit).
+The final acquisition, \textit{failure region sampling}, is based on the theoretically optimal $q$-proposal distribution \cite{kahn1953methods} and will sample from the likely failure regions to ensure a better estimate of the probability of failure.
+After the algorithm runs for $T$ iterations, a total of $3T$ sampled points were used to fit the surrogate model.
+The three safety validation tasks are then computed (lines \ref*{line:falsification}--\ref*{line:fpe} of alg. \ref{alg:bsv}).
+Falsification and most-likely failure analysis use only the true observations $y_i \in \vec{Y}$ and actual inputs $\vec{x}_i \in \vec{X}$ to find the inputs that led to failures and the most-likely failure, respectively.
+Then the final surrogate model or the weights are used to efficiently compute an importance sampling estimate of the failure probability.
+\Cref{alg:bsv} describes the BSV algorithm, and \cref{fig:algorithm} illustrates the process.
+
+
+\begin{figure}[t!]
+    \input{algorithms/bsv/bsv-algorithm}
+\end{figure}
+
+\begin{figure}[b!]
+    \centering
+    \resizebox{\textwidth}{!}{
+        \input{diagrams/bsv/bayesian-safety-validation-diagram}
+    }
+    \caption{\textit{Bayesian safety validation} used for all three safety validation tasks.}
+    \label{fig:algorithm}
+\end{figure}
+
+
+\section{Experiments}\label{sec:bsv_experiments}
+
+To test the effectiveness of BSV, we ran experiments across several different test problems with varying numbers of failure modes, a stochastic sequential decision making system, and a real-world case study using a prototype neural network-based runway detection system.
+
+
+\begin{figure}[b!]
+    \centering
+
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth,inkscapelatex=false]{figures/bsv/toys/truth_booth_models_joint.svg}
+        \caption{Representative problem.}
+        \label{fig:toy_rep}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth,inkscapelatex=false]{figures/bsv/toys/truth_squares_models_joint.svg}
+        \caption{Two square failure modes.}
+        \label{fig:toy_squares}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \includesvg[width=\textwidth,inkscapelatex=false]{figures/bsv/toys/truth_himmelblau_models.svg}
+        \caption{Mixture model, three modes.}
+        \label{fig:toy_mixture}
+    \end{subfigure}
+    
+    \caption{Failure regions and operational models for the three test problems.}
+    \label{fig:toys}
+\end{figure}
+
+
+\subsection{Simplified Test Problems}\label{sec:toys}
+Three example toy problems with access to the true value of $p_\text{fail}$ were used for testing.
+The first problem (called \textsc{Representative}) was chosen based on the observed shape of the failure region of the runway detection system, which is our primary case study and a system for which we do not have access to the true failure probability.
+The representative toy problem is modeled using Booth's function \cite{optbook}: $f(\vec{x}) = (x_1 + 2x_2 - 7)^2 + (2x_1 + x_2 - 5)^2 \le 200$, thresholded to make this a binary function.
+We define the operational parameters to be over the range $[-10, 5]$ for both $x_1$ and $x_2$ and set the operational likelihood model as $x_1 \sim \mathcal{N}_\text{trunc}(-10, 1.5; [-10, 5])$ and $x_2 \sim \mathcal{N}(-2.5, 1)$ where $\mathcal{N}_\text{trunc}(\mu, \sigma; [a, b])$ is the normal distribution truncated between $[a,b]$.
+The second toy problem (called \textsc{Squares}) has two, square, disjoint failure regions to test the exploration of BSV and refinement of rigid failure boundaries.
+The operational parameters are over the range $[0, 10]$ for both $x_1$ and $x_2$, each with the operational likelihood model of $\mathcal{N}(5, 1)$.
+The third toy problem (called \textsc{Mixture}) has three, smooth, disjoint failure regions and is designed to test the failure region refinement characteristic of BSV using a multimodal operational model.
+The operational range is over $[-6, 6]$ with identical Gaussian mixture models that have two equal components of $\mathcal{N}_\text{trunc}(2,1; [-6,6])$ and $\mathcal{N}_\text{trunc}(-2,1; [-6,6])$.
+Similar to the representative example, we define this last problem as the thresholded Himmelblau function \cite{himmelblau1972applied}: $f(\vec{x}) = (x_1^2 + x_2 - 11)^2 + (x_1 + x_2^2 - 7)^2 \le 15$.
+The test problems and their operational models are shown in \cref{fig:toys}, where failure regions (in red) are shown for each test problem.
+Operational models are illustrated as subplots and contours, and the true system is shown above the surrogate model failure classification (fit with $\num{999}$ samples using BSV).
+
+
+\subsection{Stochastic Sequential Decision Making System}\label{sec:pomdp_example}
+BSV also works in cases where system failures are stochastic, meaning that the same input could lead to a different failure outcome.
+To test a stochastic system, we benchmark on the \textit{LightDark} sequential decision making problem \cite{platt2010belief}, modeled as a POMDP.
+In the LightDark POMDP, the agent to moves \texttt{up} or \texttt{down} by one to find the light region at $y=10$ and receives noisy observations of its true position as a function of the distance to the light region.
+The agent will receive a large reward of $100$ when executing the \texttt{stop} action at $\pm 1$ of the origin.
+If the agent stops outside the origin, then it receives a large penalty of $-100$.
+We test BSV under two cases: (1) a rare failure event when the agent never executes \texttt{stop}, and (2) a non-rare failure event when either the agent never executes \texttt{stop} or the \texttt{stop} action is executed outside the origin.
+The problem is one-dimensional and we use the initial state distribution of $\mathcal{N}(2, 3)$ as the operational model.
+
+\subsection{Neural Network-Based Runway Detection System}
+
+As a real-world case of a safety-critical subsystem, we chose a common application in autonomous flight: runway detection (RWD) using neural networks.
+Synthetic images were generated using the flight simulator X-Plane \cite{xplane}, sampled over different parameters of the approach to land (e.g., glide slope angle and distance to runway).
+We search over this parametric space instead of dealing directly in pixel or image space.
+We use an operational model of likely glide slope angles with a small standard deviation, namely $\alpha \sim \mathcal{N}(3, 0.5)$, and a model that increases the likelihood of requiring a detection as the distance to the runway decreases, namely $d \sim \mathcal{N}_\text{trunc}(0, 1; [0, 4])$.
+The parametric space is continuous in glide slope angle $\alpha \in [1,7]$ degrees and distance to runway $d \in [0.1,4]$ nmi.
+These models can be learned from historical flight data for more accurate estimates of the failure probability.
+
+Treated as a black box, the runway detector is a convolutional neural network (CNN) that processes runway images from a front-facing RGB camera. The network predicts the runway corners and bounding box and is intended to be used to augment GPS/INS localization measurements during autonomous landing \cite{durand2023formal}.
+\Cref{fig:radnet_xplane} illustrates example images with detected runway corners and bounding boxes.
+A failure is defined as a misdetection (i.e., a false negative). Since the system is designed to be active only during the landing phase, we condition on the aircraft being on an approach.
+The use of a simulator means the RWD can be stressed outside the normal flight envelope to better characterize the full range of system failures, with a potentially dangerous-to-fly example shown in \cref{fig:radnet_dangerous}.
+
+
+\begin{figure}[t!]
+    \centering
+
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \fbox{\includegraphics[width=\textwidth]{figures/bsv/xplane/radnet_nominal.jpg}}
+        \caption{Nominal conditions.}
+        \label{fig:radnet_nominal}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \fbox{\includegraphics[width=\textwidth]{figures/bsv/xplane/radnet_weather.jpg}}
+        \caption{Low-likely weather.}
+        \label{fig:radnet_weather}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \centering
+        \fbox{\includegraphics[width=\textwidth]{figures/bsv/xplane/radnet_dangerous.jpg}}
+        \caption{Potentially dangerous to fly.}
+        \label{fig:radnet_dangerous}
+    \end{subfigure}
+
+    \caption{Simulated runway conditions in X-Plane input to the runway detection system.}
+    \label{fig:radnet_xplane}
+\end{figure}
+
+
+\subsection{Safety Validation Metrics}
+We define several metrics to measure the performance across the three safety validation tasks \cite{corso2021survey} defined in the background \cref{sec:safety_validation}.
+
+\paragraph{Falsification metrics.} The total number of failure cases, or more generally, the proportion of all system evaluations that resulted in failures, is the primary metric used to assess falsification (sometimes called the \textit{failure rate}):
+\begin{equation}
+    R_\text{fail} = \frac{\text{number of failures}}{\text{total number of evaluations}} = \frac{|\vec{X}_\text{fail}|}{|\vec{X}|}
+\end{equation}
+
+\paragraph{Most-likely failure analysis metrics.} The goal of most-likely failure analysis, as the name suggests, is to determine the failure with maximum operational likelihood. A natural way to assess the relative performance of this task against baselines is to compare the likelihood under the operational model of the determined most-likely failure:
+\begin{equation}
+    \mathcal{L}^* = \max_{\vec{x}_i \in \vec{X}, y_i \in \vec{Y}} p(\vec{x}_i)\mathds{1}\{y_i\}
+\end{equation}
+
+\paragraph{Failure probability estimation metrics.} Because probability of failure estimation is the primary objective of this work---capturing all three safety validation tasks---we look at the performance across several different metrics.
+When we have access to the true $p_\text{fail}$ (e.g., in the toy examples), then we can measure the relative error in the estimated $\hat{p}_\text{fail}$:
+\begin{equation}
+    \hat{\Delta}_\text{fail} = \frac{|p_\text{fail} - \hat{p}_\text{fail}|}{p_\text{fail}} \label{eq:pfail_error}
+\end{equation}
+Measured as a proportion, relative error can be interpreted as the percent difference in the estimate and makes it easier to compare performance across problems.
+We also analyze the failure likelihood distribution $\{\log p(\vec{x}_i)\}_{\vec{x}_i \in \vec{X}_\text{fail}}$, where distributions with higher likelihood are preferred, as they cover more relevant example failures.
+
+
+\paragraph{Coverage of design space.} To measure the coverage of the design space, an average dispersion coverage metric has been used in the context of safety validation to estimate how well the sampled points cover the input space \cite{esposito2005adaptive, corso2021survey}:
+\begin{equation}
+    C_\text{input}(\vec{X}) = 1 - \frac{1}{\delta} \sum_{j=1}^n \frac{\min(d_j(\vec{X}), \delta)}{n}
+\end{equation}
+where $C_\text{input}(\vec{X}) \in [0,1]$ and the metric is defined over a grid of $n$ points, separated by $\delta$.
+The distance function $d_j(\vec{X})$ is defined as the minimum distance between the $j$th point in the grid to a point in $\vec{X}$ \cite{esposito2005adaptive, corso2021survey}.
+
+When ground truth is available, we are also interested in the characterization of the failure and non-failure regions over the entire domain as predicted by the surrogate model. We define $C_\text{output} \in [0,1]$ as the proportion of the output space that the surrogate and the true system agree upon.
+This can be interpreted as the surrogate classification accuracy.
+
+
+\subsection{Baseline Methods}
+We compare \textsc{BayesianSafetyValidation} (\cref{alg:bsv}) against standard Monte Carlo (MC) sampling and population Monte Carlo (PMC) \cite{cappe2004population} with self-normalized importance sampling \cite{owen2013monte}.
+PMC requires an initial adaptive proposal $q_\text{PMC}$, which we set to be equal to the operational likelihood model for each of the example problems.
+The experiments were run for $T_\text{max} = 100$ iterations using $N_q = 50$ samples per iteration and ran across $3$ seeds.
+This results in $N_qT_\text{max}(T_\text{max} + 1)/2 = 252{,}500$ total samples per seed.
+Because sampling-based methods like MC and PMC tend to require many samples to adequately estimate the rare-event \cite{de2005tutorial}, we only test these methods on the example toy problems.
+Motivated by sample efficiency, we focus our comparison on the relative error in the estimated probability of failure $\hat{\Delta}_\text{fail}$ as a function of the number of samples, defined in \cref{eq:pfail_error}.
+
+
+\begin{figure}[b!]
+    \begin{center}
+    \includegraphics[width=\textwidth]{figures/bsv/toys/mc_pmc_bsv.pdf}
+    \caption{Estimator comparisons (with a log-scale horizontal axis).}
+    \label{fig:pmc}
+    \end{center}
+\end{figure}
+
+
+\section{Analysis and Results}\label{sec:bsv_results}
+We split the analysis into two sections: (1) comparison against existing methods for rare-event estimation (this tests the full Bayesian safety validation algorithm), and (2) comparison of the Gaussian process-based approach with different sampling/selection methods (this tests the failure search and refinement acquisition functions).
+We ran an ablation study to empirically show the influence of each acquisition function on the performance of the safety validation tasks.
+We demonstrate the algorithm on a stochastic system, a complex failure region problem, and a system that outputs a probabilistic value of failure (instead of strictly binary) to show that BSV is applicable in the less restrictive problem case.
+Lastly, we report results on the runway detection system as a real-world case study.
+
+
+\subsection{Failure Probability Estimator Analysis}
+\Cref{fig:pmc} shows the error curves over the number of samples, which is equivalent to the number of system evaluations.
+Note that MC fails to estimate anything in the allotted number of samples in the representative example.
+BSV outperforms both MC and PMC in reducing the error in the probability of failure estimate using several orders of magnitude fewer samples; converging before $1000$ samples in each case and closer to $100$ samples in the first two problems.
+Results also indicate that BSV has lower variance compared to MC and PMC, which can partially be explained by the fact that two of the three acquisition functions take deterministic maximums and only one, the failure region sampling acquisition, samples predicted failure points stochastically.
+
+
+\begin{figure}[b!]
+    \centering
+    \includegraphics[width=\textwidth]{figures/bsv/toys/baseline_sampling_schemes.pdf}
+    \caption{Fitting the same GP using different sampling schemes.}
+    \label{fig:sampling}
+\end{figure}
+
+
+\subsection{Design Point Selection Analysis: Acquisition Functions}
+
+To test the proposed \textsc{FailureSearchAndRefinement} procedure (\cref{alg:fsar}),
+we use the same GP fitting technique as in \cref{alg:bsv}, but replace the selection process in line \ref*{line:subsequent_points} with several baseline methods.
+The baselines we use are Latin hypercube sampling (LHS) \cite{mckay1979latin}, Sobol sequence selection \cite{sobol1967distribution}, discrete grid selection, and uniform sampling.
+Each technique is defined over the entire operational domain.
+Importantly, we note that all methods fit the selected points to the same initial GP and use the same importance sampling procedure defined in \cref{alg:bsv}.
+The FSAR approach is the only method that uses incremental information to optimize the subsequent points.
+\Cref{fig:sampling} illustrates the relative error in the estimate when running BSV for $T=333$ iterations ($N=999$ system evaluations), run over $3$ seeds with shaded regions reporting standard deviation (noting that Sobol and discrete do not use stochasticity).
+Exponential smoothing is applied to the curves with the raw values as thin lines of the same color.
+Using FSAR for acquiring subsequent points outperforms the baselines by orders of magnitude in the first two problems, and is comparable to Sobol sequence selection in the third problem but with more stability in the estimate.
+\Cref{tab:ablation_sampling} reports the quantitative results from the baseline experiments.
+FSAR achieves the best performance across the various safety validation metrics and comparable input coverage relative to the baselines, notably with less than $1\%$ error in all cases.
+
+
+\begin{table*}[t!]
+    \begin{center}
+    \begin{threeparttable}
+        \begin{adjustbox}{max width=\textwidth}
+        \begin{small}
+        \begin{tabular}{@{}clrrrrr@{}}
+        \toprule
+            Example Problem & Selection Method & $R_\text{fail} \uparrow$ & $\mathcal{L}^* \uparrow$ & $\hat{\Delta}_\text{fail} \downarrow$ & $C_\text{input} \uparrow$ & $C_\text{output} \uparrow$\\
+            \midrule
+            \textsc{Representative} %
+            & Discrete grid selection       &  $0.336$                 &  $\num{5.62e-8}$           &  $\num{0.58225}$             &  \bfseries$\num{0.774}$  &  $0.9933$  \\
+            \multirow{4}{*}{\makecell[l]{\includesvg[width=0.5in]{figures/bsv/toys/surrogate_hard_booth_small.svg}}} %
+            & Uniform sampling              &  $0.342$                 &  $\num{4.02e-8}$           &  $\num{0.25978}$             &  $0.673$                 &  $0.9919$  \\
+            & Latin hypercube sampling      &  $0.332$                 &  $\num{2.49e-8}$           &  $\num{0.44777}$             &  $0.682$                 &  $0.9922$  \\
+            & Sobol sequence sampling       &  $0.335$                 &  $\num{4.98e-8}$           &  $\num{0.51179}$             &  $0.719$                 &  $0.9912$  \\
+            & Failure search and refinement (Ours) &  \bfseries$\num{0.585}$  &  \bfseries$\num{5.78e-8}$  &  \bfseries$\num{0.00667}$    &  $0.638$                 &  \bfseries$\num{0.9998}$  \\
+            \midrule
+            \textsc{Squares} %
+            & Discrete grid selection       &  $0.0439$                 &  $0.00196$                 &  $\num{0.26473}$            &  \bfseries$\num{0.774}$  &  $0.9894$  \\
+            \multirow{4}{*}{\makecell[l]{\includesvg[width=0.5in]{figures/bsv/toys/surrogate_hard_squares_small.svg}}} %
+            & Uniform sampling              &  $0.0532$                 &  $0.00086$                 &  $\num{0.17017}$            &  $0.673$                 &  $0.9909$  \\
+            & Latin hypercube sampling      &  $0.0525$                 &  $0.00192$                 &  $\num{0.24486}$            &  $0.682$                 &  $0.9907$  \\
+            & Sobol sequence sampling       &  $0.0525$                 &  $0.00142$                 &  $\num{0.27050}$            &  $0.719$                 &  $0.9935$  \\
+            & Failure search and refinement (Ours) &  \bfseries$\num{0.4800}$  &  \bfseries$\num{0.00253}$  &  \bfseries$\num{0.00727}$   &  $0.643$                 &  \bfseries$\num{1.0}$  \\
+            \midrule
+            \textsc{Mixture} %
+            & Discrete grid selection       &  $0.0479$                  &  $0.0345$                  &  $\num{0.00279}$           &  \bfseries$\num{0.774}$  &  $0.9900$  \\
+            \multirow{4}{*}{\makecell[l]{\includesvg[width=0.5in]{figures/bsv/toys/surrogate_hard_himmelblau_small.svg}}} %
+            & Uniform sampling              &  $0.0576$                  &  $0.0360$                  &  $\num{0.04919}$           &  $0.673$                 &  $0.9871$  \\
+            & Latin hypercube sampling      &  $0.0441$                  &  $0.0349$                  &  $\num{0.10469}$           &  $0.682$                 &  $0.9864$  \\
+            & Sobol sequence sampling       &  $0.0505$                  &  $0.0369$                  &  $\num{0.00787}$           &  $0.719$                 &  $0.9881$  \\
+            & Failure search and refinement (Ours) &  \bfseries$\num{0.4640}$   &  \bfseries$\num{0.0383}$   &  \bfseries$\num{0.00124}$  &  $0.663$                 &  \bfseries$\num{0.9984}$  \\
+            \bottomrule
+        \end{tabular}
+        \end{small}
+        \end{adjustbox}
+    \end{threeparttable}
+    \end{center}
+    \caption{Comparison against other sampling/selection methods.}
+    \label{tab:ablation_sampling}
+\end{table*}
+
+
+\subsection{Complex Failure Region}
+As a visual example, we test the baseline sampling algorithms against BSV on a more complex failure region shape in \cref{fig:aircraft} (where the white circles indicate the selected points for each algorithm).
+Using a uniform operational likelihood model, BSV is run using only the \textit{boundary refinement} acquisition function which, by design, will explore the uncertainty when no failure boundaries are available to refine.
+In relatively few samples given a limited budget, BSV is able to fit to the complex failure region by focusing its search on failure boundary refinement.
+
+
+\begin{figure}[t!]
+    \centering
+    \includesvg[pretex=\tiny, inkscapelatex=true, width=\textwidth]{figures/bsv/toys/aircraft_baselines.svg}
+    \caption{Fitting the same GP for a complex failure region using $\num{300}$ selected points.}
+    \label{fig:aircraft}
+\end{figure}
+
+
+\subsection{Ablation Study of Acquisition Functions}
+To empirically test the importance of all three acquisition functions, we perform an ablation study on the disjoint \textsc{Squares} problem to determine the effect of the combinations of acquisition functions across the safety validation metrics.
+The \textsc{Squares} example problem was chosen based on having two disjoint failure regions with precise boundaries, one of which is less likely than the other.
+Thus this problem requires careful balance between boundary refinement and deliberate exploration for multiple potential failure regions.
+Each ablation was run with $90$ samples over $5$ seeds for a fair comparison (i.e., when using all three acquisitions, each one gets a third of the budget).
+Results in \cref{tab:ablation} indicate that the individual acquisitions perform well on the single metric they were designed for (i.e., \textit{exploration} covers the input space, \textit{failure sampling} has the highest failure rate, yet \textit{boundary refinement} requires exploration in order to avoid exploiting a single failure mode). 
+Using all three acquisition functions balances between the safety validation metrics and achieves the smallest error in the probability of failure estimate $\hat{\Delta}_\text{fail}$, while also finding a failure with the highest relative likelihood.
+In tables \ref{tab:ablation_sampling} and \ref{tab:ablation}, arrows indicate whether the given metric is better to be high $(\uparrow)$ or low $(\downarrow)$.
+
+
+\begin{table*}[!b]
+\begin{center}
+\begin{threeparttable}
+    \begin{adjustbox}{max width=\textwidth}
+    \begin{small}
+    \begin{tabular}{@{}lrrrrr@{}}
+    \toprule
+        Acquisition(s) & $R_\text{fail} \uparrow$ & $\mathcal{L}^* \uparrow$ & $\hat{\Delta}_\text{fail} \downarrow$ & $C_\text{input} \uparrow$ & $C_\text{output} \uparrow$\\
+        \midrule
+        $[1]$ exploration                                               &  $\num{0.044}$               &  $\num{0.00029}$             &  $\num{0.04382}$              &  \bfseries$\num{0.233}$       &  $\num{0.9795}$  \\
+        $[2]$ boundary refinement                                       &  $\num{0.411}$               &  $\num{0.00025}$             &  $\num{0.93670}$              &  $\num{0.056}$                &  $\num{0.9598}$  \\
+        $[3]$ failure sampling                                          &  \bfseries$\num{0.707}$      &  $\num{0.00186}$             &  $\num{0.21682}$              &  $\num{0.066}$                &  $\num{0.9604}$  \\
+        $[1,2]$ exploration + boundary refinement                       &  $\num{0.189}$               &  $\num{0.00205}$             &  $\num{0.18483}$              &  $\num{0.159}$                &  \bfseries$\num{0.9801}$  \\
+        $[2,3]$ boundary refinement + failure sampling                  &  $\num{0.436}$               &  $\num{0.00197}$             &  $\num{0.24817}$              &  $\num{0.087}$                &  $\num{0.9647}$  \\
+        $[1,3]$ exploration + failure sampling                          &  $\num{0.318}$               &  $\num{0.00171}$             &  $\num{0.10057}$              &  $\num{0.163}$                &  $\num{0.9761}$  \\
+        $[1,2,3]$ exploration + boundary refinement + failure sampling  &  $\num{0.298}$               &  \bfseries$\num{0.00243}$    &  \bfseries$\num{0.03553}$     &  $\num{0.138}$                &  $\num{0.9777}$  \\
+        \bottomrule
+    \end{tabular}
+    \end{small}
+    \end{adjustbox}
+\end{threeparttable}
+\end{center}
+\caption{Ablation study: Effect of the \textit{failure search and refinement} acquisition functions.}
+\label{tab:ablation}
+\end{table*}
+
+
+\subsection{Stochastic System Results}\label{sec:pomdp_results}
+\Cref{fig:pomdp} shows the failure probability estimation results of the stochastic LightDark POMDP when comparing BSV to nominal estimation, where nominal MC estimation samples the operational model directly.
+For the non-rare case in \cref{fig:pomdp_nonrare}, BSV is comparable to nominal yet finds more failures ($41\%$ failure rate for BSV and $15\%$ for nominal).
+The non-rare failure probability estimate shown in the dashed horizontal line is computed after running nominal estimation for $5000$ iterations and comes out to about $\hat{p}_\text{fail} = 0.15$.
+For the rare case in \cref{fig:pomdp_rare}, BSV finds failures early in the search and has a stable failure probability estimate with lower variance using fewer samples than the nominal.
+Notably, BSV finds orders of magnitude more failures than the nominal with a failure rate of about $9\%$ compared to $0.041\%$.
+The dashed horizontal line is the nominal estimate computed over $100{,}000$ samples and results in a rare failure of $\hat{p}_\text{fail}=\num{4.1e-4}$.
+
+
+\begin{figure}[t!]
+    \centering
+    
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/bsv/pomdp/figure-nonrare.pdf}
+        \caption{Non-rare stochastic failure.}
+        \label{fig:pomdp_nonrare}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/bsv/pomdp/figure-rare.pdf}
+        \caption{Rare stochastic failure.}
+        \label{fig:pomdp_rare}
+    \end{subfigure}
+
+    \caption{Failure probability estimate for the test POMDP: MC sampling vs. BSV.}
+    \label{fig:pomdp}
+\end{figure}
+
+
+\subsection{Test on Probabilistic-Valued System}\label{sec:prob_valued_sys}
+The GP construction and proposed acquisition functions were designed to estimate failure probability over binary-valued systems that indicate failure, but the same techniques are applicable when the system outputs a probabilistic value of failure (that can be interpreted as confidence in the output, distance to failure boundary, or stochasticity of the system---which has been addressed by similar approaches from \textcite{gong2022sequential}).
+Using the same Himmelblau function \cite{himmelblau1972applied} defined for the \textsc{Mixture} problem in \cref{sec:toys}, we change the system to output a measure of failure (where $f(\vec{x}) \ge 0.5$ means failure):  $f(\vec{x}) = \operatorname{logit}^{-1}\left(c - \left((x_1^2 + x_2 - 11)^2 + (x_1 + x_2^2 - 7)^2\right) \right)$ for the threshold $c=15$ (same as the previous problem), passing the output through a sigmoid to interpret it as a probability with a steepness of $s=1/c$.
+\Cref{fig:prob_valued} illustrates this example with a final relative error of $\hat{\Delta}_\text{fail} = \num{0.012}$, a falsification rate of $53.6\%$ of samples, an input coverage of $C_\text{input}=0.653$, and output coverage of $C_\text{output}=0.9998$.
+This example is tested on the \textsc{Mixture} (Himmelblau) problem, where the output is a probability value indicating distance to the failure boundary at $f(\vec{x}) = \num{0.5}$.
+The top row illustrates BSV and the FSAR acquisition functions after $N=\num{999}$ true observations (shown as red/green squares), with a uniform operational model $p$ shown as subplots.
+The uniform model helps highlight that the failure region sampling is now more influenced by those failures that are farther away from the failure threshold $c$, shown as yellow peaks.
+The bottom row shows the surrogate model and ground truth, where ``soft'' is the probabilistic output and ``hard'' is the binary failure classification.
+
+
+\begin{figure}[t!]
+    \centering
+    \includesvg[inkscapelatex=false, width=\textwidth]{figures/bsv/toys/plot-combined-333-himmelblau-15-probability.svg}
+    \adjustbox{trim=0 0 0 15mm, clip}{\includesvg[inkscapelatex=false, width=\textwidth]{figures/bsv/toys/plot-combined-333-truth-surrogate-himmelblau-15-probability.svg}}
+    \caption{Test on a probabilistic-valued system (the \textsc{Mixture} problem).}
+    \label{fig:prob_valued}
+\end{figure}
+
+
+\subsection{Real-World Case Study Results: Runway Detection System}
+
+After empirically validating the BSV algorithm on the example problems with access to the ground truth, we now report the performance on a real-world example: a runway detection system.
+\Cref{fig:rwd_surrogate} shows the final surrogate after running BSV for $T=333$ iterations (resulting in $999$ sampled points).
+The algorithm focused the search on the likely regions of the design space and found several failure modes.
+We can efficiently determine the most-likely failure, which is indicated in \cref{fig:rwd_surrogate}, and found $571$ failures out of $999$ evaluations, shown in \cref{tab:results_rwd} as the failure rate of $57.2 \%$.
+The failure probability estimate is shown to quickly converge in \cref{fig:rwd_ll_and_pfail} after just above $400$ system evaluations, with a final estimated failure probability of $\hat{p}_\text{fail} = \num{5.8e-3}$.
+If we instead used Monte Carlo sampling of $p$, we would expect to find only about $6$ failures in the $999$ system evaluations (compared to $571$).
+
+
+\begin{figure}[t!]
+    \centering
+    \includesvg[inkscapelatex=true, pretex=\footnotesize, width=0.45\textwidth]{figures/bsv/rwd/mlf.svg}
+    \caption{The final surrogate for the runway detection system using $\num{999}$ data points.}
+    \label{fig:rwd_surrogate}
+\end{figure}
+
+
+\begin{wraptable}{r}{0.4\textwidth}
+    \vspace*{-3mm}
+    \begin{center}
+    \begin{threeparttable}
+        \begin{small}
+        \begin{tabular}{@{}cccc@{}}
+        \toprule
+            $R_\text{fail}$ & $\mathcal{L}^*$ & $\hat{p}_\text{fail}$ & $C_\text{input}$ \\
+            \midrule
+            $0.572$ & $0.02$ & $\num{5.8e-3}$ & $0.681$\\
+            \bottomrule
+        \end{tabular}
+        \end{small}
+    \end{threeparttable}
+    \end{center}
+    \vspace*{-3mm}
+    \caption{RWD safety metrics.}
+    \label{tab:results_rwd}
+\end{wraptable}
+
+
+One way to characterize the spread of failures is to plot the log-likelihood of the observed failures under the operational model, namely $\log p(\vec{x})$.
+Shown in \cref{fig:rwd_ll_and_pfail}, the right-skewed peak of the distribution indicates that the failures that were found have high likelihood, and thus are more useful failures to fix first, before system deployment.
+Five different iterations of the BSV algorithm and acquisition functions for the RWD system are illustrated in \cref{fig:bsv_rwd}.
+Red indicates failures predicted by the probabilistic surrogate model, and lighter colors indicate maximums for the acquisition functions.
+The red and green squares overlaid on the surrogate are the true system evaluations, and the red circles in the acquisition functions show the next selected point.
+Notice the low uncertainty in the concentration of points around the likely glide slope region (the operational models for glide slope and distance to runway are shown as subplots).
+The likelihood decay in the boundary refinement acquisition is illustrated as the spread of the likelihood influence as it dissipates over time.
+Finally, the refined failure region using $N=\num{999}$ samples represents the predicted distribution of failures.
+\Cref{tab:results_rwd} reports the safety validation metrics, noting that $\hat{\Delta}_\text{fail}$ and $C_\text{output}$ are not reported since we do not have access to the true failure boundaries of the system.
+
+
+\begin{figure}[t!]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/bsv/rwd/rwd_loglikelihood_pfail.pdf}
+    \caption{Results using Bayesian safety validation on the runway detection system.}
+    \label{fig:rwd_ll_and_pfail}
+\end{figure}
+
+
+\begin{figure}[pht!]
+    \centering
+    \setlength{\tabcolsep}{-1.5em} % for the horizontal padding
+    \begin{tabular}{@{}cl@{}}
+        \noindent\parbox[c]{\hsize}{\includesvg[inkscapelatex=false, width=0.92\textwidth]{figures/bsv/rwd/plot-combined-1.svg}} & {\scriptsize$t=1$} \\
+        \adjustbox{trim=0 0 0 15mm, clip}{\noindent\parbox[c]{\hsize}{\includesvg[inkscapelatex=false, width=0.92\textwidth]{figures/bsv/rwd/plot-combined-3.svg}}} & {\scriptsize$t=3$} \\
+        \adjustbox{trim=0 0 0 15mm, clip}{\noindent\parbox[c]{\hsize}{\includesvg[inkscapelatex=false, width=0.92\textwidth]{figures/bsv/rwd/plot-combined-9.svg}}} & {\scriptsize$t=9$} \\
+        \adjustbox{trim=0 0 0 15mm, clip}{\noindent\parbox[c]{\hsize}{\includesvg[inkscapelatex=false, width=0.92\textwidth]{figures/bsv/rwd/plot-combined-100.svg}}} & {\scriptsize$t=100$} \\
+        \adjustbox{trim=0 0 0 15mm, clip}{\noindent\parbox[c]{\hsize}{\includesvg[inkscapelatex=false, width=0.92\textwidth]{figures/bsv/rwd/plot-combined-333.svg}}} & {\scriptsize$t=333$} \\
+    \end{tabular}
+    \caption{Bayesian safety validation applied to the runway detection problem.}
+    \label{fig:bsv_rwd}
+\end{figure}
+\setlength{\tabcolsep}{6pt} % General space between cols (6pt standard)
+
+
+\begin{figure}[p]
+    \centering
+    
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=0.8\textwidth]{figures/bsv/rwd/rwd-successes.pdf}
+        \caption{Examples of successful runway detections.}
+        \label{fig:rwd_successes}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \centering
+        \includegraphics[width=0.8\textwidth]{figures/bsv/rwd/rwd-failures.pdf}
+        \caption{Examples of failing to detect the runway.}
+        \label{fig:rwd_failures}
+    \end{subfigure}
+
+    \caption{Example runway images from X-Plane found by Bayesian safety validation.}
+    \label{fig:rwd_successes_and_failures}
+\end{figure}
+
+
+Results show that we can characterize failure regions, generate a set of likely failures, compute the most-likely failure, and use the surrogate model to estimate the failure probability of the runway detector in a small number of samples, e.g., only using $999$ samples in our experiments.
+Post-analysis could even further characterize the failure boundary by focusing on the likely region centered around the glide slope angle of $3$ degrees.
+Example runway images that successfully detected the runway and failed to detect the runway are shown in \cref{fig:rwd_successes_and_failures}.
+We demonstrate the BSV algorithm on a two-dimensional case, but this work could be scaled to higher-dimensional problems that incorporate additional environmental parameter models such as roll angle, time-of-day, and weather, and that use different airport runways.
+\textcite{binois2022survey} provide a survey on methods, challenges, and guidelines when modeling high-dimensional problems using Gaussian processes for Bayesian optimization.
+
+\subsection{Validating the Simulator}
+A failure probability estimate is only as good as the simulator.
+To enhance our approach, future work could validate the simulator by taking a representative set of design points and running a flight test to compare the RWD outputs. 
+Using flight testing to record real operations of avionics systems and compare to simulated outputs is a common way to validate simulators \cite{gregory2021introduction}.
+In the case of runway detection systems, flight testing also provides more image data for the types of runways the autonomous aircraft may encounter.
+Other methods, such as style transfer \cite{gatys2016image,johnson2016perceptual}, as shown in \cref{fig:rwd_style_transfer}, could close the sim-to-real gap \cite{ruter2024investigating} by bringing the simulated images closer to images seen during operation.
+
+
+\begin{figure}[t]
+    \vspace*{-10mm}
+    \centering
+    \resizebox{0.7\linewidth}{!}{
+        \begin{tikzpicture}
+            \node[inner sep=0.5mm, draw=black, label={[above, text height=1.0cm, text depth=0.15cm]:simulated data}] (simulated) at (0,0) {\includegraphics[width=0.25\linewidth]{diagrams/bsv/simulated-image.png}};
+
+            \node[inner sep=0.5mm, draw=black, right=3cm of simulated, label={[above, text height=1.0cm, text depth=0.15cm]:flight test image}] (flight_test) {\includegraphics[width=0.25\linewidth]{diagrams/bsv/flight-test-image.png}};
+
+            \draw[->, thick] (simulated) -- (flight_test) node[above, midway, font=\footnotesize] {style} node[below, midway, font=\footnotesize] {transfer};
+        \end{tikzpicture}
+    }
+    \caption{Future work: Example style transfer of simulated images from flight test data.}
+    \label{fig:rwd_style_transfer}
+\end{figure}
+
+
+\subsection{Open-Source Interface}
+Using the \texttt{GaussianProcesses.jl} \cite{fairbrother2022gaussianprocesses} and \texttt{AbstractGPs.jl} packages \cite{widmann2023abstractgps}, we developed an open-source Julia package\footnote{The package and experiments are available at \url{https://github.com/sisl/BayesianSafetyValidation.jl}.} to be applied to other black-box systems. It is intended to fit into the suite of safety validation tools when considering autonomous aircraft certification.
+To extend to another system, a user can implement the following interface:
+
+\vspace*{3mm}
+\begin{juliaframe}
+\begin{lstlisting}[language=JuliaLocal, style=julia]
+abstract type SystemParameters end
+function reset() end
+function initialize() end
+function generate_input(sample::Vector)::Input end
+function evaluate(input::Input)::Vector{Bool} end
+\end{lstlisting}
+\end{juliaframe}
+\vspace*{-0.5mm}
+Below is an example of setting up a system with a 2D operational model, running the BSV algorithm to learn the surrogate, and then computing the three safety validation tasks:
+\vspace*{1mm}
+\begin{juliaframe}
+\begin{lstlisting}[language=JuliaLocal, style=julia]
+using BayesianSafetyValidation
+system_params = RunwayDetectionSystemParameters() # defined by the user
+model = [OperationalParameters("distance", [0.1, 4], TruncatedNormal(0, 1.0, 0, 4)),
+         OperationalParameters("slope", [1, 7], Normal(3, 0.5))]
+surrogate  = bayesian_safety_validation(system_params, model; T=100)
+X_failures = falsification(surrogate.x, surrogate.y)
+ml_failure = most_likely_failure(surrogate.x, surrogate.y, model)
+p_failure  = p_estimate(surrogate, model)
+\end{lstlisting}
+\end{juliaframe}
+
+
+\section{Conclusion}\label{sec:conclusion}
+In this chapter, we framed the black-box safety validation problem as a Bayesian optimization problem and introduced \textit{Bayesian safety validation} (BSV) to build a probabilistic surrogate model that predicts system failures and uses importance sampling to efficiently estimate the failure probability.
+In the process, we proposed a set of acquisition functions, called \textit{failure search and refinement} (FSAR), that each help achieve the safety validation tasks by covering the design space to search for failures and refining likely failure boundaries and regions.
+The Gaussian process construction allowed us to analytically derive the predicted failure boundaries, and we showed that the combination of acquisition functions is important to find more failures, find more likely failures, and minimize error in the estimate of the probability of failure.
+
+Primarily interested in cases where the black-box system only outputs a binary indication of failure, we also showed that our method works well in the less restrictive case where the system outputs a real-valued measure of failure confidence, severity, or distance.
+BSV is also applicable when system failures are stochastic and the idea of deterministic ``failure regions'' becomes irrelevant.
+In the case of stochastic system failures, self-normalizing importance sampling was used to compute the proposal weights, which scales better to higher dimensional problems.
+
+This technique was applied to validate an image-based neural network runway detection system in simulation.
+Alongside traditional DO-178C procedures \cite{do178c}, this work is currently being used to supplement the FAA certification process of an autonomous cargo aircraft \cite{durand2023formal}.
+We emphasize that the exact values of the most-likely failure likelihood and the estimated probability of failure are largely dependent on the choice of operational model, and learning these models from collected flight data would provide a more realistic understanding of the true probability of failure.

@@ -1,0 +1,205 @@
+\ProvidesPackage{sisl-suthesis}
+\RequirePackage{luatex85}
+
+\usepackage{suthesis-2e}
+
+% Load the tufte style elements
+
+%% Stuff Cherry picked from 
+% https://github.com/Tufte-LaTeX/tufte-latex/blob/master/tufte-common.def
+\usepackage{tufte-stripped}
+
+
+%% font and typo
+\usepackage{titlecaps}
+\usepackage{fontspec}
+
+\usepackage{csquotes}
+\usepackage[american]{babel} % to fix http://tex.stackexchange.com/questions/315532/bblmainlanguage-error-in-biblatex
+
+\Addlcwords{et de la le a an the at is by for in of on to up and as but it or nor all with for from to about across against along among before below given into like near next off on out over past per round than toward unlike until unto upon via within}
+
+\usepackage{suffix}
+\usepackage{realscripts}
+\usepackage{newunicodechar}
+
+% Specify hyphenation
+\hyphenation{multi-objective}
+
+\newfontface{\calligraphic}{Latin Modern Math}[Scale=0.85]
+\newunicodechar{𝒪}{{\normalfont\calligraphic 𝒪}}
+\newunicodechar{ℬ}{{\normalfont\calligraphic ℬ}}
+\newunicodechar{𝒜}{{\normalfont\calligraphic 𝒜}}
+\newunicodechar{𝒮}{{\normalfont\calligraphic 𝒮}}
+
+
+
+% from tufte-book
+\RequirePackage[osf,sc]{mathpazo}
+\setmainfont[Renderer=Basic, Numbers=OldStyle, Scale = 1.0]{TeX Gyre Pagella}
+\setsansfont[Renderer=Basic, Scale=0.90]{TeX Gyre Heros}
+\setmonofont[Renderer=Basic]{TeX Gyre Cursor}
+\setmonofont{DejaVu Sans Mono}[Scale=MatchLowercase]
+
+\usepackage[protrusion=true,expansion]{microtype}
+\newfontfeature{Microtype}{protrusion=default;expansion=default;}
+
+
+%% Maths and friends
+\usepackage{amsmath,bm,amssymb}
+\usepackage{amsthm}
+\usepackage{bbm}
+\usepackage[makeroom]{cancel}
+\usepackage[group-digits=integer,group-minimum-digits=4,group-separator={,},detect-all]{siunitx}
+
+\usepackage{vector} % package included in this directory
+
+%% lists
+\usepackage{enumitem}
+\setlist[description]{font=\normalfont\textbf}
+
+
+%% Internal references
+\usepackage[unicode]{hyperref}
+\hypersetup{%
+	pdfborder = {0 0 0},
+	bookmarksdepth = section,
+	citecolor = DarkGreen,
+	linkcolor = DarkBlue,
+	urlcolor = DarkGreen,
+}%
+\usepackage[noabbrev,capitalize]{cleveref}
+\crefname{algorithm}{algorithm}{algorithms}
+
+%% Figures, Plots, and Tables
+\usepackage{booktabs}
+\usepackage{adjustbox}
+\usepackage{tikz}
+\usepackage{textpos}
+\usepackage{subcaption}
+
+
+\usetikzlibrary{calc}
+\usetikzlibrary{fit}
+\usetikzlibrary{positioning}
+\usetikzlibrary{arrows}
+\usetikzlibrary{arrows.meta}
+\usetikzlibrary{decorations.pathreplacing}
+\usetikzlibrary{decorations.pathmorphing}
+\usetikzlibrary{decorations.text}
+\usetikzlibrary{patterns}
+\usetikzlibrary{graphs}
+\usetikzlibrary{graphdrawing}
+\usetikzlibrary{shapes}
+\usetikzlibrary{backgrounds}
+\usetikzlibrary{bayesnet} % to draw bayesnet
+\usetikzlibrary{automata} % to draw automata
+
+\usepackage{pgfplots}
+\pgfplotsset{compat=newest}
+\pgfplotsset{every axis legend/.append style={legend cell align=left, font=\footnotesize, draw=none, fill=none}}
+\pgfplotsset{every axis/.append style={axis background/.style={fill=white}}}
+\pgfplotsset{every tick label/.append style={font=\footnotesize}}
+\pgfplotsset{every axis label/.append style={font=\footnotesize}}
+
+
+\usepgfplotslibrary{fillbetween}
+\usepgfplotslibrary{groupplots}
+\usepgfplotslibrary{patchplots}
+\usepgfplotslibrary{statistics}
+\usepgfplotslibrary{ternary}
+
+%% BIBLIOGRAPHY
+% Note: use "citestyle=numeric-comp" if you want [1,2,3] to be [1–3]
+\usepackage[backend=biber,bibstyle=ieee,citestyle=numeric,dashed=false,mincitenames=1,maxcitenames=1,maxbibnames=99,sorting=none,sortcites=true]{biblatex}
+
+\AtEveryBibitem{
+\clearfield{doi}
+}
+
+% in preamble
+\AtEveryBibitem{
+\ifentrytype{inproceedings}{
+ 	\clearlist{address}
+ 	\clearlist{publisher}
+ 	\clearname{editor}
+ 	\clearlist{organization}
+ 	\clearfield{url}  
+ 	\clearfield{doi}  
+ 	\clearfield{pages}  
+ 	\clearlist{location}
+ }{}
+ \ifentrytype{article}{
+	 \clearfield{url}
+ }
+ }
+
+% Optional packages
+\usepackage{comment}
+
+\newcommand{\todo}[1]{\textcolor{magenta}{\textbf{TODO:} #1}}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% MATH from https://github.com/sisl/tufte_algorithms_book/blob/master/tufte_algorithms_book.cls
+
+\newcommand{\dset}{\mathcal{D}}
+\newcommand{\params}{\vect \theta}
+
+\newcommand{\true}{\text{true}}
+\newcommand{\false}{\text{false}}
+\newcommand{\transpose}{\top}
+
+\newcommand{\noisy}[1]{\tilde{#1}}
+
+\newcommand{\mat}[1]{\vect{#1}}
+
+\usepackage{mathtools}
+\DeclarePairedDelimiter{\paren}{\lparen}{\rparen}
+\DeclarePairedDelimiter{\brock}{\lbrack}{\rbrack}
+\DeclarePairedDelimiter{\curly}{\{}{\}}
+\DeclarePairedDelimiter{\norm}{\lVert}{\rVert}
+\DeclarePairedDelimiter{\abs}{\lvert}{\rvert}
+\DeclarePairedDelimiter{\anglebrackets}{\langle}{\rangle}
+\DeclarePairedDelimiter{\ceil}{\lceil}{\rceil}
+\DeclarePairedDelimiter{\floor}{\lfloor}{\rfloor}
+\DeclarePairedDelimiter{\card}{|}{|}
+
+\newcommand{\minimize}{\operatornamewithlimits{minimize}}
+\newcommand{\maximize}{\operatornamewithlimits{maximize}}
+\newcommand{\supremum}{\operatornamewithlimits{supremum}}
+\newcommand{\argmin}{\operatornamewithlimits{arg\,min}}
+\newcommand{\argmax}{\operatornamewithlimits{arg\,max}}
+\newcommand{\subjectto}{\operatorname{subject~to}}
+\newcommand{\for}{\text{for} \;}
+\newcommand{\gaussian}[2]{\mathcal{N}(#1, #2)}
+\newcommand{\Gaussian}[2]{\mathcal{N}\paren*{#1, #2}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\N}{\mathbb{N}}
+\DeclareMathOperator{\sign}{sign}
+\DeclareMathOperator{\Real}{\text{Re}}
+\DeclareMathOperator{\Imag}{\text{Im}}
+\DeclareMathOperator{\nil}{\textsc{nil}}
+\DeclareMathOperator{\Expectation}{\mathbb{E}}
+\DeclareMathOperator{\Variance}{\mathrm{Var}}
+\DeclareMathOperator{\Normal}{\mathcal{N}}
+\DeclareMathOperator{\Uniform}{\mathcal{U}}
+\DeclareMathOperator{\Dirichlet}{Dir}
+\DeclareMathOperator{\atantwo}{atan2}
+\DeclareMathOperator{\modOne}{mod_1}
+\DeclareMathOperator{\trace}{Tr}
+\newcommand{\minprob}[3]{
+\begin{aligned}
+	\minimize_{#1} & & #2\\
+	\subjectto & & #3 \\
+\end{aligned}
+}
+
+
+%% Other custom stuff
+
+
+\pgfplotsset{
+    colormap={crosswalk_policy}{ rgb(0cm)=(0.37863023680922786,0.005616712554454685,0.0063827234220941165) rgb(1cm)=(0.4224927889073662,0.013525117239964328,0.013203833182426373) rgb(2cm)=(0.4650967350699035,0.026030260138839512,0.02338570912512866) rgb(3cm)=(0.5063705153244429,0.04395280007826006,0.03745256280060143) rgb(4cm)=(0.5462460502436837,0.06405679796503538,0.05425211884129052) rgb(5cm)=(0.5846618172221983,0.08473846649822667,0.07140318181179914) rgb(6cm)=(0.6215632692756162,0.10597113324167465,0.08888542626317372) rgb(7cm)=(0.6569022655266444,0.12771950778306326,0.10669886145226617) rgb(8cm)=(0.6906361448272434,0.14994473310018713,0.12484765568389863) rgb(9cm)=(0.7227266913968899,0.17260709261462379,0.14334008717554808) rgb(10cm)=(0.7531390885860333,0.1956675217391735,0.1621883994552944) rgb(11cm)=(0.781840892122935,0.21908847226191197,0.181408565055936) rgb(12cm)=(0.8088010253346496,0.24283441044322424,0.20101999775514268) rgb(13cm)=(0.8339887851100166,0.26687210105999587,0.22104525102137684) rgb(14cm)=(0.8573728399687462,0.2911707638878049,0.24150973138062098) rgb(15cm)=(0.8789201964886324,0.3157021538285745,0.26244144754933835) rgb(16cm)=(0.8986243283754324,0.3404131639756549,0.28384164889984237) rgb(17cm)=(0.916608238344234,0.3651420226988599,0.30558907370517) rgb(18cm)=(0.9330135717457418,0.3897422792897055,0.32756151364480957) rgb(19cm)=(0.9479615540666798,0.4141112643103266,0.3496689319130044) rgb(20cm)=(0.9615575813106311,0.4381765795516727,0.3718430660206548) rgb(21cm)=(0.9738945237436757,0.46188703178381746,0.39403065050772607) rgb(22cm)=(0.9850551532231285,0.4852064947535151,0.4161889661463455) rgb(23cm)=(0.995113962523304,0.5081097026245397,0.43828288547433236) rgb(24cm)=(1.0,0.5305793279120709,0.4602828875576798) rgb(25cm)=(1.0,0.5526039231031864,0.4821637061912966) rgb(26cm)=(1.0,0.5741764502267256,0.5039033961252201) rgb(27cm)=(1.0,0.5952932158582329,0.5254826779111803) rgb(28cm)=(1.0,0.6159530893536408,0.5468844702941036) rgb(29cm)=(1.0,0.6361569214901356,0.5680935500758348) rgb(30cm)=(1.0,0.6559071066940828,0.5890962994573172) rgb(31cm)=(1.0,0.6752072494005175,0.6098805139970911) rgb(32cm)=(1.0,0.6940619068217445,0.6304352529942004) rgb(33cm)=(1.0,0.7124763884230584,0.6507507198805741) rgb(34cm)=(1.0,0.7304565979487292,0.6708181640900827) rgb(35cm)=(1.0,0.748008907717591,0.6906297985011502) rgb(36cm)=(1.0,0.7651400576459988,0.7101787283438892) rgb(37cm)=(1.0,0.7818570734103333,0.7294588886948575) rgb(38cm)=(1.0,0.798167199569797,0.7484649885337098) rgb(39cm)=(1.0,0.8140778444949507,0.767192459927072) rgb(40cm)=(1.0,0.8295965346996181,0.7856374113171931) rgb(41cm)=(1.0,0.8447308767306995,0.803796584181644) rgb(42cm)=(1.0,0.8594885251861825,0.8216673125331073) rgb(43cm)=(1.0,0.8738771557445483,0.839247484871092) rgb(44cm)=(1.0,0.8879044423260105,0.856535508298253) rgb(45cm)=(1.0,0.9015780376873691,0.8735302745851772) rgb(46cm)=(1.0,0.9149055568917501,0.8902311280179502) rgb(47cm)=(1.0,0.9278945632027041,0.9066378348984735) rgb(48cm)=(1.0,0.9405525560365261,0.922750554592852) rgb(49cm)=(1.0,0.9528869606730331,0.9385698120410795) rgb(50cm)=(0.9328830745629386,0.9732805024686334,0.9948303219187201) rgb(51cm)=(0.9162608234598941,0.9660008485022603,0.9929963716580882) rgb(52cm)=(0.8993296105264924,0.9584601371217606,0.9911127929935529) rgb(53cm)=(0.8820908752376525,0.9506492239820786,0.9891716783406822) rgb(54cm)=(0.8645467766980454,0.9425587259613961,0.9871642125106669) rgb(55cm)=(0.8467002604727891,0.9341790264731379,0.9850806038315844) rgb(56cm)=(0.8285551302856351,0.9255002827374866,0.9829100116246593) rgb(57cm)=(0.8101161248174394,0.9165124353082895,0.9806404698048311) rgb(58cm)=(0.7913889998150428,0.9072052201933141,0.9782588063225329) rgb(59cm)=(0.7723806156855385,0.8975681839542529,0.9757505580974778) rgb(60cm)=(0.7530990306998842,0.8875907022287619,0.9730998810124408) rgb(61cm)=(0.7335535998586405,0.8772620021812881,0.9702894544317883) rgb(62cm)=(0.7137550793764915,0.8665711894639416,0.9673003795810747) rgb(63cm)=(0.6937157366154185,0.8555072803547832,0.9641120709647865) rgb(64cm)=(0.673449465132984,0.8440592398404458,0.960702139801742) rgb(65cm)=(0.6529719043059317,0.8322160265250756,0.9570462682126722) rgb(66cm)=(0.6323005627351282,0.8199666453804759,0.9531180725902991) rgb(67cm)=(0.6114549443330884,0.8073002095054997,0.9488889542038753) rgb(68cm)=(0.590456675642837,0.7942060122387993,0.9443279346185169) rgb(69cm)=(0.5693296325499063,0.7806736111704297,0.939401472920259) rgb(70cm)=(0.5481000641592407,0.7666929258266019,0.9340732609990581) rgb(71cm)=(0.5267967112781407,0.7522543510590874,0.9283039922133115) rgb(72cm)=(0.5054509167881245,0.7373488884554594,0.9220510975885595) rgb(73cm)=(0.4840967253974647,0.7219682983939657,0.9152684422221337) rgb(74cm)=(0.4627709711649191,0.7061052756866557,0.9079059726873007) rgb(75cm)=(0.4415133532944995,0.6897536520653662,0.8999093038420674) rgb(76cm)=(0.4203665048407004,0.6729086290293116,0.8912192304038337) rgb(77cm)=(0.3993760663953718,0.655567044724646,0.881771144764635) rgb(78cm)=(0.37859078944789876,0.6377276784556802,0.8714943375537326) rgb(79cm)=(0.3580627146925174,0.6193915959540465,0.8603111511013215) rgb(80cm)=(0.3378475030091218,0.6005625373642026,0.8481359478379842) rgb(81cm)=(0.31800504639092037,0.5812473475746737,0.8348738453078081) rgb(82cm)=(0.298600559103455,0.5614564442962915,0.8204191563085936) rgb(83cm)=(0.27970645219642304,0.5412043120073138,0.8046534560311814) rgb(84cm)=(0.2614054299210983,0.5205099977703832,0.7874431771981097) rgb(85cm)=(0.2437895102737665,0.49939731854918373,0.7686422129237883) rgb(86cm)=(0.2268583888972236,0.4778898384453733,0.7481912293884809) rgb(87cm)=(0.21052201617936755,0.456007784502416,0.7261165611059696) rgb(88cm)=(0.1946911334361843,0.4337708141411165,0.7024454274529792) rgb(89cm)=(0.1792814827005117,0.41119842909881027,0.6772038231943772) rgb(90cm)=(0.16421487614245484,0.38831025424725496,0.6504175344004985) rgb(91cm)=(0.14942039333976045,0.36512631618754054,0.6221131407821967) rgb(92cm)=(0.1348356503227068,0.3416673384481028,0.5923190471248074) rgb(93cm)=(0.12040809932179236,0.3179550718838416,0.561066588015844) rgb(94cm)=(0.1060963336168729,0.29401268249337414,0.5283912555830137) rgb(95cm)=(0.09187138617862528,0.2698652248826714,0.49433411039176584) rgb(96cm)=(0.07771802143947712,0.24554023900469635,0.4589434528157637) rgb(97cm)=(0.0636360221559682,0.22106852233029445,0.4222768593623852) rgb(98cm)=(0.04964145830667172,0.19648515227517493,0.38440373138931416) rgb(99cm)=(0.03585037721182207,0.17183086991413707,0.3454085727758512) }
+}

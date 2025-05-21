@@ -1,0 +1,17 @@
+\begin{algorithm}[H]
+    \caption{$\Delta$-MCTS for online chance-constrained planning.}
+    \label{alg:delta-mcts}
+    \begin{algorithmic}[1]
+        \Function{$\Delta$MCTS}{$\mathcal{P}_\text{cc}, f_\theta, b$}
+        \State \new{$\mathcal{M}_\text{cc} \leftarrow \langle \mathcal{B}, \mathcal{A}, G_b, \gamma, \Delta_0 \rangle$} \Comment{convert from generative $\mathcal{P}_{cc}$}
+        \For{$1 \textbf{ to } n_\text{online}$}
+            \State \textproc{Simulate}$(f_\theta,b,d)$
+        \EndFor
+
+        \State $\bpi_\text{tree}(b, a) \propto \Big( \Big(\frac{\exp Q(b,a)}{\sum_{a'} \exp Q(b,a')}\Big) \Big(\frac{N(b,a)}{\sum_{a'} N(b,a')}\Big) \Big)^{1/\tau}$ \Comment{using \cref{eq:policy_q_weight}}
+    
+        \State \Return $a \sim \bpi_\text{tree}(b, a)\phantom{\big)}$ \Comment{let $\tau \to 0$ to get argmax}
+        \State \phantom{\Return} \!\new{$\text{s.t.}\ F(b,a) \le \Delta'(b)$} \Comment{$\Delta'(b) = \max\{\Delta_0, \Delta(b)\}$} \label{line:root_constraint}
+    \EndFunction
+    \end{algorithmic}
+\end{algorithm}

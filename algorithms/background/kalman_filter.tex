@@ -1,0 +1,11 @@
+\begin{algorithm}[t]
+    \caption{Kalman filter belief updater.}
+    \label{alg:kalman_filter}
+    \begin{algorithmic}
+    \Function{KalmanFilter$(b, a, o)$}{}
+    \State $(\vec{\mu}_p, \vec{\Sigma}_p) \leftarrow \textproc{KalmanPredict}(b, a)$ \Comment{linear-Gaussian prediction}
+    \State $b' \leftarrow \textproc{KalmanUpdate}(b, o, \vec{\mu}_p, \vec{\Sigma}_p)$ \Comment{Gaussian update}
+    \State \Return $b'$
+    \EndFunction
+    \end{algorithmic}
+\end{algorithm}

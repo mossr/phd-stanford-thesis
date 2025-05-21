@@ -1,0 +1,52 @@
+\chapter{Summary}\label{ch:summary}
+\chapterquote{It’s the way I study -- to understand something by trying to work it out or, in other words, to understand something by creating it. Not creating it one hundred percent, of course; but taking a hint as to which direction to go but not remembering the details. These you work out for yourself.}{Richard Feynman}[0.6\linewidth]
+
+Designing safe policies and performing safety validation is crucial for the adoption of artificial intelligence (AI) into real-world systems.
+The use of AI itself in accelerating the design and validation process, whether it be using machine learning or reinforcement learning, has shown to be a significant avenue for innovation.
+Using surrogate models, such as neural networks, allows us to scale these safety systems over available compute to solve large, real-world problems.
+Along with addressing scale, accounting for uncertainty in the environment dynamics and in the state of the world itself (through the use of beliefs), is required when operating in the real world---because the world is only partially observable.\footnote{Following the motto of our lab SISL: \textit{Life is a POMDP}.}
+After safe policies are developed, we then have to validate their safety to find rare failure modes potentially missed during training.
+Because these scalable policies may rely on neural networks or expensive simulators, treating them as black boxes during validation allows the validation algorithms to be broadly applied.
+This thesis studies the design of large-scale planning algorithms for POMDPs, their extensions to safety-critical problems, and efficient black-box methods for safety validation.
+
+
+% Batched belief-state planning
+We first study how to frame sequential decision making problems to scale across available compute.
+Therefore, we formulated the problem of planning into its batched equivalent.
+In doing so, we proved that in the batched planning framework, the optimal policy is preserved.
+Along with preserving optimality, we empirically show that, unsurprisingly, batching the lookahead process in MDPs can significantly improve performance.
+
+
+% I-VAE
+Next, we address the requirement of parallelized belief updaters when formulating the decision making problem in the batched planning setting.
+We investigate the use of deep conditional generative models to act as surrogates for belief updating.
+We study how to design these surrogates to efficiently sample from the posterior belief.
+We operate in the \textit{purely epistemic MDP} setting where states do not transition, turning the problem of belief updating into an inversion problem---which becomes a purely information gathering objective.
+We study heuristic policies that maximize the expected entropy of the belief and show that, in the limit, our heuristics result in the optimal one-step expected Bayesian information gain.
+We study how these surrogates would be applied in settings where observations are either direct or indirect partial state information.
+Through experiments, we observe that fine-tuning the surrogates to maximize mutual information along observation trajectories provides benefits for both planning and estimation.
+
+
+% BetaZero
+Next, we study how to learn to replace hand-crafted heuristics and generalize POMDP planning algorithms to long-horizon problems.
+We build off insights from reinforcement learning to combine online Monte Carlo tree search (MCTS) with learned offline neural network surrogates for the value function and action selection policy.
+We address challenges relating to POMDP planning: how to handle stochastic belief-state transitions in the search tree, how to handle expensive belief updates during planning, and how to represent non-parametric beliefs as input to the neural network surrogate.
+We developed a scalable POMDP policy iteration algorithm, BetaZero, and applied it to several large benchmark problems.
+Our experiments indicate that BetaZero can learn heuristics that are comparable to expertly designed counterparts, and that BetaZero learns the approximately optimal value function and action selection policy.
+
+
+% ConstrainedZero
+Next, we extend our work on POMDP planning algorithms to the safety-critical setting by formulating the problem as a  chance-constrained POMDP (CC-POMDP).
+We study how to design policy iteration algorithms and tree search methods that can predict failure probabilities and plan safely, and introduce the ConstrainedZero algorithm.
+We study the use of adaptive conformal inference as a method to estimate the failure probability threshold during online planning, and introduce a fifth \textit{adaptation} stage to MCTS, resulting in the $\Delta$-MCTS algorithm.
+We demonstrate that by factoring the reward function to separate safety, we can achieve a target level of safety that is approximately Pareto-optimal.
+We study how ConstrainedZero is applied to several safety-critical CC-POMDPs and show that it can work without change in the chance-constrained MDP setting as well.
+Insights from this study show that directly specifying a target level of safety $\Delta$ is more interpretable than tuning a cost coefficient when developing safe policies.
+
+
+% Bayesian safety validation
+Finally, we study how probabilistic surrogate models can be used to efficiently estimate the failure probability of a black-box system.
+We investigate the use of Gaussian processes as surrogate models and introduce three acquisition functions that each target different safety validation tasks.
+We introduce the Bayesian safety validation method as an approach to efficiently find failures, find likely failures, and estimate the failure probability.
+We study the estimation quality of our method on several toy examples where we have access to the true failure probability, and experiments show that our method can accurately estimate failure probability and uncover different failure modes.
+We demonstrate our method on a real-world runway detection system and provide insights into how our method is used to augment the certification of the machine learning components for an autonomous aircraft.

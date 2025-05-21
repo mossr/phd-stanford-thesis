@@ -1,0 +1,348 @@
+\usepackage{lipsum}
+
+\setlength{\headheight}{14.49998pt} % Fix warning.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Other packages
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{mathrsfs}
+\usepackage{subcaption}
+\usepackage{url}
+
+% \usepackage{showframe} % DEBUG
+
+\usepackage{wrapfig}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{amsmath}
+\allowdisplaybreaks
+\usepackage{amsfonts}
+\usepackage{amsthm}
+\newtheorem{theorem}{Theorem}
+\usepackage{cleveref}
+\newtheorem{proposition}{Proposition}
+\crefname{proposition}{proposition}{propositions}
+\crefname{theorem}{theorem}{theorems}
+\crefname{equation}{equation}{equations}
+\crefname{section}{section}{sections}
+\crefname{chapter}{chapter}{chapters}
+\crefname{part}{part}{parts}
+\crefname{figure}{figure}{figures}
+\crefname{table}{table}{tables}
+\usepackage{svg}
+\usepackage{caption}
+\usepackage{adjustbox}
+\usepackage{rotating}
+\usepackage{longtable,tabularx,booktabs}
+\usepackage[flushleft]{threeparttable}
+\usepackage{multirow}
+\usepackage{lipsum}
+\usepackage{makecell}
+\usepackage{mdframed}
+\usepackage{framed}
+\usepackage{comment}
+\usepackage{ragged2e}
+\usepackage{soul}
+\usepackage{xparse}
+\usepackage{dsfont}
+\usepackage{colortbl}
+\makeatletter
+\@namedef{ver@fixltx2e.sty}{}
+\makeatother
+\usepackage{dblfloatfix}
+\usepackage{hyphenat}
+\usepackage{bookmark}
+
+\hypersetup{hidelinks}
+
+\hyphenation{ana-lysis}
+\hyphenation{Con-strained-Zero}
+
+\definecolor{pastelMagenta}{HTML}{FF48CF}
+\definecolor{pastelPurple}{HTML}{8770FE}
+\definecolor{pastelBlue}{HTML}{1BA1EA}
+\definecolor{pastelSeaGreen}{HTML}{14B57F}
+\definecolor{pastelGreen}{HTML}{3EAA0D}
+\definecolor{pastelOrange}{HTML}{C38D09}
+\definecolor{pastelRed}{HTML}{F5615C}
+\definecolor{julia_blue}{HTML}{4063D8}
+\definecolor{julia_green}{HTML}{389826}
+\definecolor{julia_purple}{HTML}{9558B2}
+\definecolor{julia_red}{HTML}{CB3C33}
+
+\definecolor{juliafunccolor}{HTML}{2e51a2}
+\definecolor{juliaparenscolor}{HTML}{f2d71c}
+
+\newcommand\blfootnote[1]{%
+  \begingroup
+  \renewcommand\thefootnote{}\footnote{#1}%
+  \addtocounter{footnote}{-1}%
+  \endgroup
+}
+
+\NewDocumentCommand{\chapterquote}{ m m o }{%
+  \begin{flushright}
+    \begin{minipage}{\IfValueTF{#3}{#3}{0.52\linewidth}}
+      \RaggedRight
+      \textit{#1}
+
+      \rule{\linewidth}{0.4pt}
+
+      \hfill #2
+    \end{minipage}
+  \end{flushright}
+  \vspace{\baselineskip}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Algorithms
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\usepackage{algorithmicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+% http://tug.ctan.org/tex-archive/macros/latex/contrib/algorithmicx/algpseudocode.sty
+\algdef{SE}[FOR]{ParallelFor}{EndParallelFor}[1]{\textbf{parallel} \algorithmicfor\ #1}{\algorithmicend}%
+\algdef{SE}[FOR]{For}{EndFor}[1]{\algorithmicfor\ #1}{\algorithmicend}%
+\algdef{SE}[IF]{If}{EndIf}[1]{\algorithmicif\ #1}{\algorithmicend}%
+\algdef{SE}[IF]{NewIf}{NewEndIf}[1]{\new{\algorithmicif}\ #1}{\algorithmicend}%
+\algdef{C}[IF]{IF}{ElsIf}[1]{\algorithmicelse\ \algorithmicif\ #1}%
+\algdef{Ce}[ELSE]{IF}{Else}{EndIf}{\algorithmicelse}%
+\algdef{Ce}[ELSE]{IF}{Else}{NewEndIf}{\algorithmicelse}%
+\algdef{SE}[FUNCTION]{Function}{EndFunction}%
+   [2]{\algorithmicfunction\ \textproc{#1}\ifthenelse{\equal{#2}{}}{}{(#2)}}%
+   {\algorithmicend}%
+\algtext*{EndFunction} % remove "end" for functions only
+\algrenewcommand\alglinenumber[1]{\color{gray}\tiny #1}
+
+\algtext*{EndFunction} % remove "end" for functions only
+\algtext*{EndFor} % remove "end" for for-loops only
+\algtext*{EndParallelFor} % remove "end" for parallel for-loops only
+\algtext*{EndIf} % remove "end" for if-statements only
+\algtext*{NewEndIf} % remove "end" for (new) if-statements only
+
+\definecolor{commentgray}{rgb}{0.6, 0.6, 0.6}
+\newcommand{\GrayComment}[1]{{\hfill{\color{commentgray}$\triangleright$ #1}}}
+
+\newcommand{\AlignedComment}[2][0.65\linewidth]{%
+  \leavevmode\hfill\makebox[#1][l]{\quad{\color{lightgray}\(\triangleright\)~#2}}}
+
+\usepackage{newfloat}
+\usepackage{listings}
+\DeclareCaptionStyle{ruled}{labelfont=normalfont,labelsep=colon,strut=off}
+\lstset{%
+	basicstyle={\footnotesize\ttfamily},%
+	numbers=left,numberstyle=\footnotesize,xleftmargin=2em,%
+	aboveskip=0pt,belowskip=0pt,%
+	showstringspaces=false,tabsize=2,breaklines=true}
+\floatstyle{ruled}
+\newfloat{listing}{tb}{lst}{}
+\floatname{listing}{Listing}
+
+% Hack to remove white lines (as seen in the second case), problem with \footnotesize
+% https://tex.stackexchange.com/a/129651
+\newenvironment{juliaframe}{%
+    \linespread{1.25}\selectfont
+    \begin{mdframed}[%
+        backgroundcolor=backgroundgray,%
+        hidealllines=true,%
+        innerleftmargin=0pt,%
+        innertopmargin=-1pt,%
+        innerbottommargin=-6pt,%
+        innerrightmargin=0pt,
+        skipabove=12pt,
+        skipbelow=-6pt,
+    ]
+}{%
+    \end{mdframed}
+}
+
+\input{preamble/julia_listings}
+
+\lstdefinelanguage{JuliaLocal}{
+    language = Julia, % inherit Julia lang. to add keywords
+    morekeywords = [3]{reset, initialize, generate_input, evaluate, bayesian_safety_validation, falsification, most_likely_failure, p_estimate}, % define more functions
+    morekeywords = [2]{BayesianSafetyValidation, SystemParameters, Input, RunwayDetectionSystemParameters, OperationalParameters, TruncatedNormal, Normal}, % define more types and modules
+}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Formatting Helpers
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newcommand{\rulesep}{\unskip\ \textcolor{lightgray}{\vrule}\ }
+\newcommand{\tworow}[1]{\multirow{2}{*}{{#1}}}
+\newcommand{\cpomcpow}{\cite{sunberg2018online,wu2021adaptive}}
+\newcommand{\cdespot}{\cite{ye2017despot,wu2021adaptive}}
+\newcommand{\cadaops}{\cite{wu2021adaptive}}
+\newcommand{\scs}[1]{{\scriptsize#1}}
+\newcommand{\pp}{\phantom{)}}
+\newcommand{\td}[1]{\color{magenta}#1}
+\newcommand{\negphantom}[1]{\settowidth{\dimen0}{#1}\hspace*{-\dimen0}}
+\newcommand{\np}{\negphantom{)}}
+\newcommand{\lit}[1]{{\color[rgb]{0.7,0.7,0.7}(#1)}\np}
+\newcommand{\litdesc}[1]{\lit{#1}\phantom{)}}
+\newcommand{\textdoublequotes}{\textsf{''}}
+\newcommand{\sameresultsparen}{\textdoublequotes{}\phantom{\ 0.00)}}
+\newcommand{\sameresults}{\textdoublequotes{}}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% TiKZ, PGF plots, and colors
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+
+\usetikzlibrary{calc}
+\usetikzlibrary{shapes.geometric}
+\usetikzlibrary{external}
+\usetikzlibrary{patterns}
+\usetikzlibrary{shapes,arrows,fit}
+\usetikzlibrary{positioning}
+\usetikzlibrary{arrows.meta, calc, shapes}
+\usetikzlibrary{graphs}
+\usetikzlibrary{decorations.pathmorphing}
+\usetikzlibrary{decorations.pathreplacing}
+\usetikzlibrary{backgrounds}
+\usetikzlibrary{shadows}
+
+\definecolor{blues1}{RGB}{198, 219, 239}
+\definecolor{blues2}{RGB}{158, 202, 225}
+\definecolor{blues3}{RGB}{107, 174, 214}
+\definecolor{blues4}{RGB}{49, 130, 189}
+\definecolor{blues5}{RGB}{8, 81, 156}
+
+\definecolor{grays1}{RGB}{219, 219, 219}
+\definecolor{grays2}{RGB}{202, 202, 202}
+\definecolor{grays3}{RGB}{174, 174, 174}
+\definecolor{grays4}{RGB}{130, 130, 130}
+\definecolor{grays5}{RGB}{81, 81, 81}
+
+\definecolor{gray1}{HTML}{999999}
+\definecolor{gray2}{HTML}{CCCCCC}
+\definecolor{gray3}{HTML}{D9D9D9}
+\definecolor{gray4}{HTML}{EFEFEF}
+
+\definecolor{darkgreen}{HTML}{38761D}
+\definecolor{darkred}{HTML}{980000}
+\definecolor{cardinal}{HTML}{B83A4B}
+
+\definecolor{newcolor}{HTML}{C70039}
+\definecolor{tablecolorgood}{HTML}{007662}
+\definecolor{tablecolorbad}{HTML}{8c1515}
+\definecolor{backgroundgray}{HTML}{F2F2F2}
+
+\definecolor{timingcolor}{rgb}{0.55, 0.55, 0.55}
+\newcommand{\tcolor}[1]{\color{timingcolor}#1}
+
+% Standard colors
+\def\primarycolor{black}
+\def\secondarycolor{white}
+
+%% PGFPlotsX.jl
+\usetikzlibrary{arrows.meta}
+\usetikzlibrary{backgrounds}
+\usepgfplotslibrary{patchplots}
+\usepgfplotslibrary{fillbetween}
+\pgfplotsset{%
+    layers/standard/.define layer set={%
+        background,axis background,axis grid,axis ticks,axis lines,axis tick labels,pre main,main,axis descriptions,axis foreground%
+    }{
+        grid style={/pgfplots/on layer=axis grid},%
+        tick style={/pgfplots/on layer=axis ticks},%
+        axis line style={/pgfplots/on layer=axis lines},%
+        label style={/pgfplots/on layer=axis descriptions},%
+        legend style={/pgfplots/on layer=axis descriptions},%
+        title style={/pgfplots/on layer=axis descriptions},%
+        colorbar style={/pgfplots/on layer=axis descriptions},%
+        ticklabel style={/pgfplots/on layer=axis tick labels},%
+        axis background@ style={/pgfplots/on layer=axis background},%
+        3d box foreground style={/pgfplots/on layer=axis foreground},%
+    },
+}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Math
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\DeclareMathOperator{\Var}{Var}
+\newcommand*{\defeq}{\stackrel{\text{def}}{=}}
+\newcommand{\bpi}{\boldsymbol\pi}
+\newcommand*\diff{\mathop{}\!\mathrm{d}}
+
+\definecolor{resultcolor}{HTML}{000000}
+
+\newsavebox\CBox
+\def\mathBF#1{\sbox\CBox{$#1$}\resizebox{\wd\CBox}{\ht\CBox}{{\color{resultcolor}$\mathbf{#1}$}}}
+
+\usepackage{siunitx}
+\sisetup{detect-weight=true,detect-family=true,group-digits=false,separate-uncertainty,group-separator={,}}
+\newcommand{\pmm}{{\normalfont$\pm$}}
+
+% https://tex.stackexchange.com/questions/239242/why-does-big-mid-not-work
+\makeatletter
+\let\amsmath@bigmidtmp\bigm
+
+\newcommand{\bigmid}[1]{%
+  \ifcsname fenced@\string#1\endcsname
+    \expandafter\@firstoftwo
+  \else
+    \expandafter\@secondoftwo
+  \fi
+  {\expandafter\amsmath@bigmidtmp\csname fenced@\string#1\endcsname}%
+  {\amsmath@bigmidtmp#1}%
+}
+\newcommand{\DeclareFence}[2]{\@namedef{fenced@\string#1}{#2}}
+\makeatother
+
+\DeclareFence{\mid}{|}
+
+% https://mirror.mwt.me/ctan/fonts/mathabx/texinputs/mathabx.sty
+\DeclareFontFamily{U}{mathx}{\hyphenchar\font45}
+\DeclareFontShape{U}{mathx}{m}{n}{
+      <5> <6> <7> <8> <9> <10>
+      <10.95> <12> <14.4> <17.28> <20.74> <24.88>
+      mathx10
+      }{}
+\DeclareSymbolFont{mathx}{U}{mathx}{m}{n}
+\DeclareFontSubstitution{U}{mathx}{m}{n}
+
+% https://mirror.math.princeton.edu/pub/CTAN/fonts/mathabx/texinputs/mathabx.dcl
+\DeclareMathSymbol{\betterbigvee}         {1}{mathx}{"9A}
+\DeclareMathSymbol{\betterbigwedge}       {1}{mathx}{"99}
+
+\DeclareMathAccent{\widebar}{0}{mathx}{"73} % from mathabx
+
+\newcommand{\overarrow}[2]{\overset{\mathclap{\substack{#2 \\ \downarrow}}}{#1}}
+\newcommand{\underarrow}[2]{\underset{\mathclap{\substack{\uparrow \\ #2}}}{#1}}
+
+\let\oldvec\vec
+\renewcommand{\vec}[1]{\vect{#1}}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Commands
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newcommand{\note}[1]{\textbf{\textcolor{cyan}{#1}}}
+\newcommand{\citeneeded}{\textbf{\textcolor{magenta}{[CITE]}}}
+\newcommand{\colorurl}[1]{\textcolor{cardinal}{\url{#1}}}
+
+\newcommand{\new}[1]{{\color{newcolor}#1}}
+\newcommand{\bpm}{\boldsymbol\pm}
+
+% Switch between regular (symbol) and numeric footnotes
+\renewcommand{\thefootnote}{\fnsymbol{footnote}}
+\newcommand{\numericfootnote}[1]{%
+\let\oldthefootnote=\thefootnote%
+\stepcounter{mpfootnote}%
+\addtocounter{footnote}{-1}%
+\renewcommand{\thefootnote}{\arabic{mpfootnote}}%
+\footnote{#1}%
+\let\thefootnote=\oldthefootnote%
+}
+
+\setlength{\fboxsep}{0pt}
+\setlength{\fboxrule}{0.3pt}

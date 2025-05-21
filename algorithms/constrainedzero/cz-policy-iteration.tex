@@ -1,0 +1,34 @@
+\begin{algorithm}[H]
+    \caption{Offline ConstrainedZero policy iteration.} 
+    \label{alg:constrainedzero}
+    \begin{algorithmic}[1]
+        \Require \new{$\mathcal{P}_\text{cc} {\defeq}\langle \mathcal{S}, \mathcal{A}, \mathcal{O}, \mathcal{F}, G, \gamma, \Delta_0 \rangle$} \Comment{Generative CC-POMDP}
+        \Require $\psi$: Parameters
+        \Function{PolicyIteration}{$\mathcal{P}_\text{cc}, \psi$}
+            \State $f_\theta \leftarrow \textproc{InitializeNetwork}(\psi)$ \Comment{$(P_\theta, V_\theta, \new{F_\theta}) \leftarrow f_\theta$}
+            \For {$i \leftarrow 1 \textbf{ to } n_\text{iterations}$}
+                \State $\mathcal{D} \leftarrow \textproc{CollectData}(\mathcal{P}_\text{cc}, f_\theta)$ \Comment{policy evaluation}
+                \State $f_\theta \leftarrow \textproc{Train}(f_\theta, \mathcal{D})$ \Comment{policy improvement}
+            \EndFor
+            \State \Return $\pi(b)\! \leftarrow\! \new{\textproc{$\Delta$MCTS}(\mathcal{P}_\text{cc}, f_\theta, b)}\!$ \Comment{online policy (alg. \ref{alg:delta-mcts})}
+        \EndFunction
+    \end{algorithmic}
+    \begin{algorithmic}[1]
+        \Function{CollectData}{$\mathcal{P}_\text{cc}, f_\theta$}
+        \State $\mathcal{D} = \emptyset$
+        \ParallelFor{$j \leftarrow 1 \textbf{ to } n_\text{data}$}
+            \For {$t \leftarrow 1 \textbf{ to } T$} \Comment{sample a trajectory}
+                \State $a_t \leftarrow \new{\textproc{$\Delta$MCTS}(\mathcal{P}_\text{cc}, f_\theta, b_t)}$ \Comment{record $\bpi_\text{tree}^{(t)}$ vector}
+                \State $s_{t+1},\, r_t,\, o_t \sim G(s_t, a_t)$ \Comment{generative model}
+                \State $b_{t+1} \leftarrow P(s_{t+1} \mid b_t, a_t, o_t)$ \Comment{update belief}
+            \EndFor
+            \For {$t \leftarrow 1 \textbf{ to } T$}
+                \State $g_t \leftarrow \sum_{i=t}^T \gamma^{(i-t)} r_i$ \Comment{computed over trajectory}
+                \State \new{$e_t \leftarrow \mathds{1}\big\{ \betterbigvee_{i=t}^T \big((s_i, a_i) \in \mathcal{F}\big) \big\}$} \Comment{failure event}
+                \State $\mathcal{D}_j^{(t)} \leftarrow \mathcal{D}_j^{(t)} \cup \big\{(b_t, \bpi_\text{tree}^{(t)}, g_t, \new{e_t}) \big\}$
+            \EndFor
+        \EndParallelFor
+        \State \Return $\mathcal{D}$
+    \EndFunction
+    \end{algorithmic}
+\end{algorithm}
